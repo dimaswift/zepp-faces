@@ -1,0 +1,74 @@
+{
+  "configVersion": "v1",
+  "app": {
+    "appId": 8479565,
+    "appName": "MiBand7",
+    "appType": "watchface",
+    "version": {
+      "code": 1,
+      "name": "1.0"
+    },
+    "icon": "preview.png",
+    "vender": "MelianMiko",
+    "description": ""
+  },
+  "permissions": [
+    "gps"
+  ],
+  "runtime": {
+    "apiVersion": {
+      "compatible": "1.0.0",
+      "target": "1.0.1",
+      "minVersion": "1.0.0"
+    }
+  },
+  "device": {
+    "targets": [
+      "gts"
+    ],
+    "platforms": [
+      "nxp"
+    ]
+  },
+  "module": {
+    "page": {
+      "pages": [
+        "pages/index"
+      ],
+      "window": {
+        "navigationBarBackgroundColor": "#ffffff",
+        "navigationBarTextStyle": "black",
+        "navigationBarTitleText": "",
+        "backgroundColor": "#eeeeee",
+        "backgroundTextStyle": "light"
+      }
+    },
+    "app-widget": {
+      "widgets": [
+        "app-widget/index"
+      ]
+    },
+    "watch-widget": {
+      "widgets": []
+    },
+	"watchface": {
+		"path": "watchface/index",
+		"main":1,
+		"editable":1,
+		"lockscreen":1,
+		"hightCost":1
+	},
+    "app-side": {
+      "path": "app-side/index"
+    },
+    "setting": {
+      "path": "setting/index"
+    }
+  },
+  "i18n": {
+    "en-US": {
+      "name": "zepp"
+    }
+  },
+  "defaultLanguage": "en-US"
+}
