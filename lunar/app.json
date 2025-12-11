@@ -1,8 +1,8 @@
 {
   "configVersion": "v1",
   "app": {
-    "appId": 88888888,
-    "appName": "Base8",
+    "appId": 88888881,
+    "appName": "Lunar",
     "appType": "watchface",
     "version": {
       "code": 1,
@@ -13,7 +13,7 @@
     "description": ""
   },
   "permissions": [
-    "gps"
+    
   ],
   "runtime": {
     "apiVersion": {

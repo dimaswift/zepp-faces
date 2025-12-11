@@ -1,22 +1,18 @@
 (() => {
     
-    const DAY = 86400;
+    const DAY = 86400
 
     function getPhaseFromEpoch(unixTime, epochTime, periodSeconds, resolution) {
 
         const dt = (unixTime - epochTime) % periodSeconds
       
-        const n = dt / periodSeconds;
+        const normalized = dt / periodSeconds;
 
-        const bin = Math.floor(n * resolution)
+        const bin = Math.floor(normalized * resolution)
 
-        const progress = (n * resolution) - bin
+        const progress = (normalized * resolution) - bin
 
-        return {
-          phase,
-          progress,
-          bin
-        }
+        return { normalized, progress, bin }
     }
 
 
@@ -423,7 +419,7 @@
     function entrypoint() {
         build()
         tick()
-		state.timerId = timer.createTimer(0, 1, () => {
+		state.timerId = timer.createTimer(0, 20, () => {
             tick()
         })
     }
