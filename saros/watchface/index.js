@@ -1,7 +1,5 @@
-
 (() => {
     
-
      const QuadOp = {
         Identity: 0,
         Rot90: 1,
@@ -12,6 +10,13 @@
         MirrorDiag: 6,
         MirrorAntiDiag: 7
     };
+
+    const Screen = {
+        Top: 0,
+        Mid: 1,
+        Bottom: 2
+    };
+
     const WIDTH = 8
        
      const bit4 = (x, y) => 1 << (y * 4 + x);
@@ -27,102 +32,85 @@
         bit4(1, 3) | bit4(2, 3) | bit4(3, 3),
     ];
     
-     const rotations = [//61 40 73 52 
+     const rotations = [
             [0, 4, 1, 6], [0, 4, 2, 5], [0, 4, 3, 7], 
             [1, 6, 0, 4], [1, 6, 2, 5], [1, 6, 3, 7], 
             [2, 5, 0, 4], [2, 5, 1, 6], [2, 5, 3, 7],
             [3, 7, 0, 4], [3, 7, 1, 6], [3, 7, 2, 5]
         ]
-      const ORGX = [0, 4, 4, 0];
-      const ORGY = [0, 0, 4, 4];
-
-        function glyphMask(n) {
-            let clampedN = Math.min(n, 7);
-            let m = 0;
-            for (let i = 0; i <= clampedN; i++) {
-                m |= STEP_MASKS[i];
-            }
-            return m;
-        }
-
-        function applyOp4(x, y, op) {
-            switch (op) {
-                case QuadOp.Identity:       return { ox: x,     oy: y };
-                case QuadOp.Rot90:          return { ox: 3 - y, oy: x };
-                case QuadOp.Rot180:         return { ox: 3 - x, oy: 3 - y };
-                case QuadOp.Rot270:         return { ox: y,     oy: 3 - x };
-                case QuadOp.MirrorX:        return { ox: 3 - x, oy: y };
-                case QuadOp.MirrorY:        return { ox: x,     oy: 3 - y };
-                case QuadOp.MirrorDiag:     return { ox: y,     oy: x };
-                case QuadOp.MirrorAntiDiag: return { ox: 3 - y, oy: 3 - x };
-                default:                    return { ox: x,     oy: y };
-            }
-        }
-
-        function drawGlyph(n, d, color, op, matrix) {
-            const quadIdx = d & 3;
-            const baseX = ORGX[quadIdx];
-            const baseY = ORGY[quadIdx];
-            const m = glyphMask(n);
-
-            for (let y = 0; y < 4; y++) {
-                for (let x = 0; x < 4; x++) {
-                    const { ox, oy } = applyOp4(x, y, op);
-                    matrix(baseX + ox, baseY + oy, m & (1 << (y * 4 + x)) ? 0xFFFFFF : 0x000000);
-                }
-            }
-        }
-
-  
+    const ORGX = [0, 4, 4, 0];
+    const ORGY = [0, 0, 4, 4];
 
 
-    let SAROS = [1263539259000, 1832512139000, 2401484786000, 2970457223000, 3539418443000, 4108400891000 ]
-    let percentText = null
+    let SAROS = [
+        [1263539259000, 1832512139000, 2401484786000, 2970457223000, 3539418443000, 4108400891000 ],
+        [1306963038000, 1875931573000, 2444899951000, 3013868032000, 3582836063000 ],
+        [1337558034000, 1906525753000, 2475493133000, 3044460348000, 3613427546000, 4182394514000 ]
+    ]
+    let heart = null
     let time = null
+    let battery = null
+    let vibrate = null
+    let lastClick = 0
+    let clickSequence = ''
+    let step = null
     let COLOR_FG = 0xFFFFFF
     let timerId = null
-
+    let mode = 0
+    const MODE_COUNT = 3
     let maxBins8 = Math.pow(8, 12)
-    let topScreen = []
-    let bottomScreen = []
-    let middleScreen = []
-
-        /**
-     * Converts HSV to a 24-bit RGB integer.
-     * @param {number} h - Hue (0 - 360)
-     * @param {number} s - Saturation (0 - 255)
-     * @param {number} v - Value/Brightness (0 - 255)
-     * @returns {number} 24-bit integer (0xRRGGBB)
-     */
-    function hsvToRgb(h, s, v) {
-        s /= 255;
-        v /= 255;
-
-        const i = Math.floor(h / 60) % 6;
-        const f = h / 60 - i;
-        const p = v * (1 - s);
-        const q = v * (1 - f * s);
-        const t = v * (1 - (1 - f) * s);
-
-        let r, g, b;
-
-        switch (i) {
-            case 0: r = v; g = t; b = p; break;
-            case 1: r = q; g = v; b = p; break;
-            case 2: r = p; g = v; b = t; break;
-            case 3: r = p; g = q; b = v; break;
-            case 4: r = t; g = p; b = v; break;
-            case 5: r = v; g = p; b = q; break;
+    let screens = []
+    let drawnBin = 0
+    let next = null
+    let nextSaros = 0
+    let commands = []
+    let current = 0
+    let screenWidth = 0
+    let debugTexts = []
+    let debugBtns = []
+    let screenHeight = 0
+    let heartTicks = 0
+    let heartMin = 50
+    let heartMax = 120
+    let lastStatUpdate = 0
+    let radix = 8
+    function glyphMask(n) {
+        let clampedN = Math.min(n, 7);
+        let m = 0;
+        for (let i = 0; i <= clampedN; i++) {
+            m |= STEP_MASKS[i];
         }
-
-        // Scale to 0-255 and pack into a single 24-bit integer
-        const R = Math.round(r * 255);
-        const G = Math.round(g * 255);
-        const B = Math.round(b * 255);
-
-        return (R << 16) | (G << 8) | B;
+        return m;
     }
-   
+
+    function applyOp4(x, y, op) {
+        switch (op) {
+            case QuadOp.Identity:       return { ox: x,     oy: y };
+            case QuadOp.Rot90:          return { ox: 3 - y, oy: x };
+            case QuadOp.Rot180:         return { ox: 3 - x, oy: 3 - y };
+            case QuadOp.Rot270:         return { ox: y,     oy: 3 - x };
+            case QuadOp.MirrorX:        return { ox: 3 - x, oy: y };
+            case QuadOp.MirrorY:        return { ox: x,     oy: 3 - y };
+            case QuadOp.MirrorDiag:     return { ox: y,     oy: x };
+            case QuadOp.MirrorAntiDiag: return { ox: 3 - y, oy: 3 - x };
+            default:                    return { ox: x,     oy: y };
+        }
+    }
+
+    function drawGlyph(n, d, op, screen, color) {
+        const quadIdx = d & 3;
+        const baseX = ORGX[quadIdx];
+        const baseY = ORGY[quadIdx];
+        const m = glyphMask(n);
+        
+        for (let y = 0; y < 4; y++) {
+            for (let x = 0; x < 4; x++) {
+                const { ox, oy } = applyOp4(x, y, op);
+                screen(baseX + ox, baseY + oy, m & (1 << (y * 4 + x)) ? color : 0x000000);
+            }
+        }
+    }
+
         /**
      * @param {BigInt[]|number[]} timestamps - Sorted array of timestamps
      * @param {BigInt|number} target - The timestamp to search for
@@ -209,6 +197,7 @@
 
         let passed = now - from
         let total = to - from 
+       
         let frac = passed / total
         return Math.floor(frac * maxBins8)
     }
@@ -224,116 +213,329 @@
         })
     }
 
-       
-    function build() {
+    function triggerVibration() {
+        vibrate.stop();
+        vibrate.scene = 23
+        vibrate.start()
+    }
+
+    function handleCommand() {
+
+        if(commands[clickSequence] != null) {
+            commands[clickSequence]();
+            clickSequence = ''
+            lastClick = 0
+        }
+    }
+
+    function cycleSaros() {
+      
+        current++
+        if(current >= SAROS.length) {
+            current = 0
+        }
+        tick()
+    }
 
        
+    function addCmd(seq, cmd) {
+        commands[seq] = cmd
+    }
+
+    function addScreen(offsetY) {
        
-      
-  
-        const deviceInfo = hmSetting.getDeviceInfo()
-       // vibrate = hmSensor.createSensor(hmSensor.id.VIBRATE)
-        const screenWidth = deviceInfo.width
-        const screenHeight = deviceInfo.height
-        const margin = 2
-        time = hmSensor.createSensor(hmSensor.id.TIME)
-        const OFFSET_Y = 64
-        // percentText = hmUI.createWidget(hmUI.widget.TEXT, {
-		// 	x: 0,
-        //     y: 50,
-        //     w: screenWidth,
-        //     h: 240,
-		// 	color: COLOR_FG,
-		// 	text_size: 32,
-		// 	align_h: hmUI.align.CENTER_H,
-		// 	align_v: hmUI.align.CENTER_V,
-		// 	text_style: hmUI.text_style.NONE,
-		// 	text: "7100 7732" 
-		// })
-      
+        let screen = []
+        const OFFSET_Y = 54
+        const margin = 1
         const pixelSize = (screenWidth / WIDTH) / 2
         const offsetX = pixelSize * 4
-        for (let x = 0; x < WIDTH; x++) {
-             topScreen[x] = []
-             bottomScreen[x] = []
-             middleScreen[x] = []
+        for (let x = 0; x < WIDTH; x++) { 
+            screen[x] = []
              for (let y = 0; y < WIDTH; y++) {
-                bottomScreen[x][y]= drawRect(offsetX + x * pixelSize,screenHeight - OFFSET_Y - y * pixelSize, pixelSize - margin, pixelSize - margin, COLOR_FG)
-                middleScreen[x][y] = drawRect(offsetX + x * pixelSize,screenHeight / 2 - pixelSize * 4 + y * pixelSize, pixelSize - margin, pixelSize - margin, COLOR_FG)
-                topScreen[x][y] = drawRect(offsetX + x * pixelSize,OFFSET_Y + y * pixelSize, pixelSize - margin, pixelSize - margin, COLOR_FG)
+                screen[x][y] = drawRect(offsetX + x * pixelSize + 1,y * pixelSize + (OFFSET_Y + offsetY * pixelSize), pixelSize - margin, pixelSize - margin, COLOR_FG)
              }  
         }
+        screens.push(screen)
+    }
+
+    function onHeartChanged() {
 
     }
 
-    function transformLocal(x, y, op) {
-        switch (op) {
-            case 0: return { tx: x,     ty: y };     // Identity
-            case 1: return { tx: 3 - y, ty: x };     // Rot90
-            case 2: return { tx: 3 - x, ty: 3 - y }; // Rot180
-            case 3: return { tx: y,     ty: 3 - x }; // Rot270
-            case 4: return { tx: 3 - x, ty: y };     // MirrorX
-            case 5: return { tx: x,     ty: 3 - y }; // MirrorY
-            case 6: return { tx: y,     ty: x };     // MirrorDiag
-            case 7: return { tx: 3 - y, ty: 3 - x }; // MirrorAntiDiag
-            default: return { tx: x,    ty: y };
-        }
-    }
-
-    function drawTopPixel(x, y, color) {
-       // topScreen[x][y].setProperty(hmUI.prop.VISIBLE, true)
-        topScreen[x][y].setProperty(hmUI.prop.COLOR, color) 
-    }
-
-    function drawBottomPixel(x, y, color) {
-       // bottomScreen[x][y].setProperty(hmUI.prop.VISIBLE, true)
-        bottomScreen[x][y].setProperty(hmUI.prop.COLOR, color) 
-    }
-
-    function drawMiddlePixel(x, y, color) {
-        //middleScreen[x][y].setProperty(hmUI.prop.VISIBLE, true)
-        middleScreen[x][y].setProperty(hmUI.prop.COLOR, color) 
-    }
-
-
-    function draw(newMoonBin, nodeBin, apogeeBin, screen) { 
-
-        drawGlyph((newMoonBin >> 9) % 8, 0, 0, rotations[nodeBin % 12][0], screen);
-        drawGlyph((newMoonBin >> 6) % 8, 1, 0, rotations[nodeBin % 12][1], screen);
-        drawGlyph((newMoonBin >> 3) % 8, 2, 0, rotations[nodeBin % 12][2], screen);
-        drawGlyph((newMoonBin >> 0) % 8, 3, 0, rotations[nodeBin % 12][3], screen);
-    }
- 
-    let drawnBin = 0
-    let next = null
-    let nextSaros = 0
-    function tick() {
-
+    function getSarosBin() {
         const now = time.utc
 
         if (now > nextSaros) {
-            next = findClosest(SAROS, now)
-            nextSaros = SAROS[next.future_index]
+            next = findClosest(SAROS[current], now)
+            nextSaros = SAROS[current][next.future_index]
         }
+        
+        return findBin(now, next, SAROS[current])
+    }
 
-        const bin = findBin(now, next, SAROS)
+    function setMode(m) {
+        debugTexts.forEach(t => {
+            t.setProperty(hmUI.prop.VISIBLE, m == 3)
+        });
+        debugBtns.forEach(t => {
+            t.setProperty(hmUI.prop.VISIBLE, m == 3)
+        });
+        mode = m
+        tick()
+       
+    }
+
+    function addDebugText() {
+        const t = hmUI.createWidget(hmUI.widget.TEXT, {
+            x: 8,
+            y: 180 + debugTexts.length * 32,
+            w: screenWidth - 4,
+            h: 22,
+            color: 0xffffff,
+            text_size: 24,
+            align_h: hmUI.align.LEFT_H,
+            align_v: hmUI.align.CENTER_V,
+            text_style: hmUI.text_style.NONE,
+            text: ''
+        }) 
+
+        debugTexts.push(t)
+        
+    }
+
+    function build() {
+
+
+        const deviceInfo = hmSetting.getDeviceInfo()
+        screenWidth = deviceInfo.width
+        screenHeight = deviceInfo.height
+        addCmd('012', cycleSaros)
+        addCmd('000', () => setMode(0))
+        addCmd('111', () => setMode(1))
+        addCmd('222', () => setMode(2))
+        addCmd('202', () => setMode(3))
+        heart = hmSensor.createSensor(hmSensor.id.HEART)
+        battery = hmSensor.createSensor(hmSensor.id.BATTERY)
+        step = hmSensor.createSensor(hmSensor.id.STEP)
+        vibrate = hmSensor.createSensor(hmSensor.id.VIBRATE)
+        time = hmSensor.createSensor(hmSensor.id.TIME)
+      
+        heart.addEventListener(heart.event.CURRENT, onHeartChanged)
+
+
+        addScreen(0)
+        addScreen(12)
+        addScreen(24)
+
+        
+        addDebugText()
+        addDebugText()
+        addDebugText()
+        addDebugText()
+        addDebugText()
+
+        heartMax = hmFS.SysProGetInt('saros_heart_max')
+        heartMin = hmFS.SysProGetInt('saros_heart_min')
+
+        if(!heartMax) heartMax = 120
+        if(!heartMin) heartMin = 50
+        
+        let btn = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
+            x: 0,
+            y: 0,
+            w: screenWidth,
+            h: screenHeight,
+            radius: 0,
+            color: 0x000000
+        })
+
+        debugBtns.push(hmUI.createWidget(hmUI.widget.BUTTON, {
+            x: 4,
+            y: 370,
+            text: 'RADIX',
+            w: screenWidth - 8,
+            h: 60,
+            color: 0x000000,
+            normal_color: COLOR_FG,
+            click_func: () => {
+                if(radix == 10) radix = 4
+                radix *= 2
+                if(radix > 64) radix = 8
+                tick()
+            }
+        }))
+
+        debugBtns.push(hmUI.createWidget(hmUI.widget.BUTTON, {
+            x: 4,
+            y: 434,
+            text: 'DECIMAL',
+            w: screenWidth - 8,
+            h: 60,
+            color: 0x000000,
+            normal_color: COLOR_FG,
+            click_func: () => {
+                radix = 10
+                tick()
+            }
+        }))
+  
+        btn.addEventListener(hmUI.event.CLICK_DOWN, (info) => {
+
+            
+
+            if (clickSequence.length > 1 && time.utc - lastClick > 1000) {
+                clickSequence = ''
+            }
+
+            lastClick = time.utc
+
+            if(info.y < screenHeight / 3) {
+                clickSequence += '0'
+            }
+            else if(info.y < screenHeight / 1.5) {
+               clickSequence += '1'
+            }
+            else {
+                clickSequence += '2'
+            }
+
+            if(clickSequence.length > 1) {
+                handleCommand()
+            }
+        })
+       
+        time.addEventListener(time.event.MINUTEEND, () => {
+             const bin = Math.floor(getSarosBin() / 2097152)
+             const last = hmFS.SysProGetInt('saros_last')
+             if (bin != last) {
+                hmFS.SysProSetInt('saros_last', bin)
+                triggerVibration()
+             }
+        })
+        
+        setMode(3)
+    }
+
+    function screenHandler(index, x, y, color) {
+        screens[index][x][y].setProperty(hmUI.prop.COLOR, color)
+    }
+
+    function draw(bin, orientation, screen, color) { 
+
+        drawGlyph((bin >> 9) % 8, 0, rotations[orientation % 12][0], (x,y,c) => screenHandler(screen, x,y,c), color);
+        drawGlyph((bin >> 6) % 8, 1, rotations[orientation % 12][1], (x,y,c) => screenHandler(screen, x,y,c), color);
+        drawGlyph((bin >> 3) % 8, 2, rotations[orientation % 12][2], (x,y,c) => screenHandler(screen, x,y,c), color);
+        drawGlyph((bin >> 0) % 8, 3, rotations[orientation % 12][3], (x,y,c) => screenHandler(screen, x,y,c), color);
+    }
+
+    function drawSaros() {
+        
+        const bin = getSarosBin()
 
         if (bin != drawnBin) {
-            const node = Math.round(bin / (4096 * 8))
-            draw(Math.round(bin / 16777216), node, 0, drawTopPixel)
-            draw(Math.round(bin / 4096), node, 0, drawMiddlePixel)
-            draw(bin, node, 0, drawBottomPixel)
+            const node = (bin >> 24) % 8
+    
+            draw(Math.floor(bin / 16777216), node, Screen.Top, COLOR_FG)
+            draw(Math.floor(bin / 4096), node, Screen.Mid, COLOR_FG)
+            draw(bin, node, Screen.Bottom, COLOR_FG) 
+
             drawnBin = bin 
         }
+        
+    }
 
+    function drawStats() {
+        let batteryBin = Math.floor(4095 * (1.0 - (battery.current / 100)))
+        draw(batteryBin, 1, Screen.Top, 0x38f2ff)
+        draw(time.utc / 1000, 1, Screen.Mid, 0xff3838)
+        draw(step.current, 1, Screen.Bottom,0x77ff38)
+    }
+
+    function mapRange(value, inMin, inMax, outMin, outMax) {
+        const t = (value - inMin) / (inMax - inMin);
+        const tc = Math.min(1, Math.max(0, t));
+        return outMin + tc * (outMax - outMin);
+    }
+
+    function debugLog(index, txt, color) {
+        if(!color) color = COLOR_FG
+        debugTexts[index].setProperty(hmUI.prop.MORE, {
+            text: txt,
+            color: color
+        })
+    }
+
+    function drawDebug() {
+        const sec = Math.floor(time.utc / 1000)
+        draw(0, 1, Screen.Top, 0x000000)
+        draw(0, 1, Screen.Mid, 0x000000)
+        draw(0, 1, Screen.Bottom,0x000000)
+
+        debugLog(0, "B: " + Math.floor(getSarosBin() / 4095).toString(radix))
+        debugLog(1, "U: " + sec.toString(radix))
+        debugLog(2, "H: " + heart.current.toString(radix) + " (" + heartMin.toString(radix) + ":" + heartMax.toString(radix) + ")")
+        debugLog(3, "S: " + step.current.toString(radix))
+    }
+
+    function drawHeart() {
+        let rate = heart.current != null ? heart.current : heart.last
+        let statUpdateRate = Math.floor((60 / rate) * 1000)
+       
+        if (time.utc - lastStatUpdate < statUpdateRate) {
+            return
+        }
+        lastStatUpdate = time.utc
+        heartTicks += rate
+        if (heartTicks > 4095) heartTicks = 0
+
+        if(rate > heartMax) {
+            heartMax = rate
+            hmFS.SysProSetInt('saros_heart_max', heartMax)
+  
+        }
+
+        if(rate < heartMin) {
+            heartMin = rate
+            hmFS.SysProSetInt('saros_heart_min', heartMin)
+        }
+
+        draw(rate, 0, Screen.Top, 0xff3838)
+
+        draw(heartTicks, 1, Screen.Mid, 0xff3838)
+
+        let heartBin = mapRange(rate, heartMin, heartMax, 0, 4095)
+      
+        draw(Math.floor(heartBin), 2, Screen.Bottom, 0xff3838)
+    }
+
+    function tick() {
+
+  
+        switch (mode) {
+            case 0:
+                drawSaros()     
+                break;
+            case 1:
+                drawStats()
+                break;
+            case 2:
+                drawHeart()
+                break;
+            case 3:
+                drawDebug()
+                break;
+            default:
+                break;
+        }
     }
 
     function entrypoint() {
+
         build()
         
         tick() 
         
-		timerId = timer.createTimer(0, 16, () => {
+		timerId = timer.createTimer(0, 530, () => {
             tick()
         })
     }
@@ -347,6 +549,7 @@
 		onDestroy() {
             timerId && timer.stopTimer(timerId)
             vibrate && vibrate.stop()
+            heart && heart.removeEventListener(heart.event.CURRENT, onHeartChanged)
         }
     })
 })()
