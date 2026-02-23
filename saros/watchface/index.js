@@ -1,52 +1,37 @@
 (() => {
     
-     const QuadOp = {
-        Identity: 0,
-        Rot90: 1,
-        Rot180: 2,
-        Rot270: 3,
-        MirrorX: 4,
-        MirrorY: 5,
-        MirrorDiag: 6,
-        MirrorAntiDiag: 7
-    };
-
-    const Screen = {
-        Top: 0,
-        Mid: 1,
-        Bottom: 2
-    };
-
-    const WIDTH = 8
-       
-     const bit4 = (x, y) => 1 << (y * 4 + x);
-
-    const STEP_MASKS = [
-        bit4(2, 1),
-        bit4(1, 1),
-        bit4(1, 2),
-        bit4(2, 2),
-        bit4(3, 0) | bit4(3, 1) | bit4(3, 2),
-        bit4(0, 0) | bit4(1, 0) | bit4(2, 0),
-        bit4(0, 1) | bit4(0, 2) | bit4(0, 3),
-        bit4(1, 3) | bit4(2, 3) | bit4(3, 3),
+    const diamond = [
+        {x: 2,y: 2},
+        {x: 3,y:1},
+        {x: 4,y:2},
+        {x: 5,y:3},
+        {x: 6,y:4},
+        {x: 5,y:5},
+        {x: 4,y:6},
+        {x: 3,y:7},
+        {x: 2,y:6},
+        {x: 1,y:5},
+        {x: 0,y:4},
+        {x: 1,y:3},
     ];
-    
-     const rotations = [
-            [0, 4, 1, 6], [0, 4, 2, 5], [0, 4, 3, 7], 
-            [1, 6, 0, 4], [1, 6, 2, 5], [1, 6, 3, 7], 
-            [2, 5, 0, 4], [2, 5, 1, 6], [2, 5, 3, 7],
-            [3, 7, 0, 4], [3, 7, 1, 6], [3, 7, 2, 5]
-        ]
-    const ORGX = [0, 4, 4, 0];
-    const ORGY = [0, 0, 4, 4];
-
+    const size = 18
+    const innerDiamond = [
+        {x: 3,y:3},
+        {x: 4,y:4},
+        {x: 3,y:5},
+        {x: 2,y:4}
+    ];
 
     let SAROS = [
         [1263539259000, 1832512139000, 2401484786000, 2970457223000, 3539418443000, 4108400891000 ],
         [1306963038000, 1875931573000, 2444899951000, 3013868032000, 3582836063000 ],
         [1337558034000, 1906525753000, 2475493133000, 3044460348000, 3613427546000, 4182394514000 ]
     ]
+
+    let YEARS = [
+        1735678800000,1767214800000,1798750800000, 1830286800000, 1861909200000, 1893445200000,1924981200000,1956517200000,1988139600000,2019675600000,2051211600000,2082747600000,2114370000000,2145906000000,2177442000000,2208978000000,2240600400000
+    ]
+
     let heart = null
     let time = null
     let battery = null
@@ -57,12 +42,16 @@
     let COLOR_FG = 0xFFFFFF
     let timerId = null
     let mode = 0
-    const MODE_COUNT = 3
+    let glyphType = 0
+
     let maxBins8 = Math.pow(8, 12)
-    let screens = []
+
     let drawnBin = 0
     let next = null
+
     let nextSaros = 0
+    let nextYear = 0
+    let nextYearIndex = null
     let commands = []
     let current = 0
     let screenWidth = 0
@@ -74,42 +63,8 @@
     let heartMax = 120
     let lastStatUpdate = 0
     let radix = 8
-    function glyphMask(n) {
-        let clampedN = Math.min(n, 7);
-        let m = 0;
-        for (let i = 0; i <= clampedN; i++) {
-            m |= STEP_MASKS[i];
-        }
-        return m;
-    }
-
-    function applyOp4(x, y, op) {
-        switch (op) {
-            case QuadOp.Identity:       return { ox: x,     oy: y };
-            case QuadOp.Rot90:          return { ox: 3 - y, oy: x };
-            case QuadOp.Rot180:         return { ox: 3 - x, oy: 3 - y };
-            case QuadOp.Rot270:         return { ox: y,     oy: 3 - x };
-            case QuadOp.MirrorX:        return { ox: 3 - x, oy: y };
-            case QuadOp.MirrorY:        return { ox: x,     oy: 3 - y };
-            case QuadOp.MirrorDiag:     return { ox: y,     oy: x };
-            case QuadOp.MirrorAntiDiag: return { ox: 3 - y, oy: 3 - x };
-            default:                    return { ox: x,     oy: y };
-        }
-    }
-
-    function drawGlyph(n, d, op, screen, color) {
-        const quadIdx = d & 3;
-        const baseX = ORGX[quadIdx];
-        const baseY = ORGY[quadIdx];
-        const m = glyphMask(n);
-        
-        for (let y = 0; y < 4; y++) {
-            for (let x = 0; x < 4; x++) {
-                const { ox, oy } = applyOp4(x, y, op);
-                screen(baseX + ox, baseY + oy, m & (1 << (y * 4 + x)) ? color : 0x000000);
-            }
-        }
-    }
+    let canvas = null
+    let diamonCanvas = null
 
         /**
      * @param {BigInt[]|number[]} timestamps - Sorted array of timestamps
@@ -242,22 +197,6 @@
         commands[seq] = cmd
     }
 
-    function addScreen(offsetY) {
-       
-        let screen = []
-        const OFFSET_Y = 54
-        const margin = 1
-        const pixelSize = (screenWidth / WIDTH) / 2
-        const offsetX = pixelSize * 4
-        for (let x = 0; x < WIDTH; x++) { 
-            screen[x] = []
-             for (let y = 0; y < WIDTH; y++) {
-                screen[x][y] = drawRect(offsetX + x * pixelSize + 1,y * pixelSize + (OFFSET_Y + offsetY * pixelSize), pixelSize - margin, pixelSize - margin, COLOR_FG)
-             }  
-        }
-        screens.push(screen)
-    }
-
     function onHeartChanged() {
 
     }
@@ -273,6 +212,16 @@
         return findBin(now, next, SAROS[current])
     }
 
+     function getYearBin() {
+        const now = time.utc
+        if (now > nextYear) {
+            nextYearIndex= findClosest(YEARS, now)
+            nextYear = YEARS[nextYearIndex.future_index]
+        }
+    
+        return findBin(now, nextYearIndex, YEARS)
+    }
+
     function setMode(m) {
         debugTexts.forEach(t => {
             t.setProperty(hmUI.prop.VISIBLE, m == 3)
@@ -280,9 +229,16 @@
         debugBtns.forEach(t => {
             t.setProperty(hmUI.prop.VISIBLE, m == 3)
         });
+        diamonCanvas.setProperty(hmUI.prop.VISIBLE, m != 3)
         mode = m
+        canvas.clear()
         tick()
-       
+    }
+
+     function addLineToCanvas(c,a,b) {
+        c.addLine({data: [a, b ],
+            count: 2
+        })
     }
 
     function addDebugText() {
@@ -290,7 +246,7 @@
             x: 8,
             y: 180 + debugTexts.length * 32,
             w: screenWidth - 4,
-            h: 22,
+            h: 28,
             color: 0xffffff,
             text_size: 24,
             align_h: hmUI.align.LEFT_H,
@@ -303,8 +259,85 @@
         
     }
 
-    function build() {
+    function ImVec2(x,y) {
+        return {x:x,y:y}
+    }
 
+    function drawNgon(c, center, size, sides) {
+        let lines = []
+        for (let i = 0; i < sides; i++) {
+            
+            let angle = (Math.PI * 2) * (i / sides);
+            let angleNext = (Math.PI * 2) * ((i + 1) / sides);
+            let x = Math.sin(angle);
+            let y = Math.cos(angle);
+            let xn = Math.sin(angleNext);
+            let yn = Math.cos(angleNext);
+            lines.push({x: center.x + x * size, y:center.y + y * size})
+            lines.push({x: center.x + xn * size, y:center.y + yn * size})
+        }
+        c.addLine({
+            data: lines,
+            count: lines.length
+        })
+    }
+
+    function drawLines(value, position) {
+
+        for (let i = 0; i < 4; ++i) {
+            let anchor = ImVec2(position.x + innerDiamond[i].x * size + size, position.y + innerDiamond[i].y * size);
+            let prev = anchor;
+            let lines = []
+            for (let j = 0; j < 3; ++j) {
+                let bit = value >> ((3 * i) + j) & 1;
+                let d = diamond[i * 3 + j];
+                let next = ImVec2(position.x + d.x * size + size, position.y + d.y * size);
+
+            if(glyphType == 0) {
+                if (bit) {
+                    lines.push(prev);
+                    lines.push(next);
+                    prev = next;
+                }
+            }
+            else if(glyphType == 1) {
+                if (bit) {
+                        lines.push(anchor);
+                        lines.push(ImVec2(position.x + d.x * size + size, position.y + d.y * size))
+                    }
+            }
+
+                
+            }
+            if(lines.length > 0) {
+                canvas.addLine({
+                    data: lines,
+                    count: lines.length
+                })
+            }
+        }
+    }
+
+    function addDiamond(c,position) {
+        let center = {x: position.x + size * 3 + size, y: position.y + size * 4}
+
+        drawNgon(c, center, size, 4);
+    }
+
+    function getCell(i) {
+        switch (i) {
+            case 0:
+                return {x:screenWidth / 2 - size * 4, y:0};
+            case 1:
+                return {x:screenWidth / 2 - size * 4, y: screenHeight / 2 - size * 4};
+            case 2:
+                return {x:screenWidth / 2 - size * 4, y: screenHeight - size * 8};
+            default:
+                return {x:0,y:0}
+        }
+    }
+
+    function build() {
 
         const deviceInfo = hmSetting.getDeviceInfo()
         screenWidth = deviceInfo.width
@@ -321,25 +354,40 @@
         time = hmSensor.createSensor(hmSensor.id.TIME)
       
         heart.addEventListener(heart.event.CURRENT, onHeartChanged)
-
-
-        addScreen(0)
-        addScreen(12)
-        addScreen(24)
-
         
-        addDebugText()
-        addDebugText()
-        addDebugText()
-        addDebugText()
-        addDebugText()
-
         heartMax = hmFS.SysProGetInt('saros_heart_max')
         heartMin = hmFS.SysProGetInt('saros_heart_min')
 
         if(!heartMax) heartMax = 120
         if(!heartMin) heartMin = 50
         
+         canvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
+            x: 0,
+            y: 0,
+            w: screenWidth,
+            h: screenHeight,
+            line_color: 0xFFFFFF,
+            line_width: 4
+            })
+
+        diamonCanvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
+            x: 0,
+            y: 0,
+            w: screenWidth,
+            h: screenHeight,
+            line_color: 0xFFFFFF,
+            line_width: 4
+            })
+            
+        let lineCanvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
+                x: 0,
+                y: 0,
+                w: screenWidth,
+                h: screenHeight,
+                line_color: 0xAAAAAAA,
+                line_width: 2
+        })
+
         let btn = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
             x: 0,
             y: 0,
@@ -381,8 +429,6 @@
   
         btn.addEventListener(hmUI.event.CLICK_DOWN, (info) => {
 
-            
-
             if (clickSequence.length > 1 && time.utc - lastClick > 1000) {
                 clickSequence = ''
             }
@@ -405,50 +451,60 @@
         })
        
         time.addEventListener(time.event.MINUTEEND, () => {
-             const bin = Math.floor(getSarosBin() / 2097152)
+             const bin = Math.floor((getSarosBin() - 64) / 16777216)
              const last = hmFS.SysProGetInt('saros_last')
              if (bin != last) {
                 hmFS.SysProSetInt('saros_last', bin)
                 triggerVibration()
              }
         })
-        
-        setMode(3)
-    }
 
-    function screenHandler(index, x, y, color) {
-        screens[index][x][y].setProperty(hmUI.prop.COLOR, color)
-    }
 
-    function draw(bin, orientation, screen, color) { 
+        let c1 = getCell(1)
+        let c2 = getCell(2)
 
-        drawGlyph((bin >> 9) % 8, 0, rotations[orientation % 12][0], (x,y,c) => screenHandler(screen, x,y,c), color);
-        drawGlyph((bin >> 6) % 8, 1, rotations[orientation % 12][1], (x,y,c) => screenHandler(screen, x,y,c), color);
-        drawGlyph((bin >> 3) % 8, 2, rotations[orientation % 12][2], (x,y,c) => screenHandler(screen, x,y,c), color);
-        drawGlyph((bin >> 0) % 8, 3, rotations[orientation % 12][3], (x,y,c) => screenHandler(screen, x,y,c), color);
+       //addLineToCanvas(lineCanvas, {x: 0, y:c1.y - size }, {x: screenWidth, y:c1.y  - size   })
+       // addLineToCanvas(lineCanvas, {x: 0, y:c2.y- size }, {x: screenWidth, y:c2.y - size })
+
+        addDiamond(diamonCanvas, getCell(0));
+        addDiamond(diamonCanvas, getCell(1));
+        addDiamond(diamonCanvas, getCell(2));
+        canvas.clear() 
+
+        addDebugText()
+        addDebugText()
+        addDebugText()
+        addDebugText()
+        addDebugText()
+
+        setMode(0)
+        tick()
     }
 
     function drawSaros() {
         
         const bin = getSarosBin()
-
         if (bin != drawnBin) {
-            const node = (bin >> 24) % 8
-    
-            draw(Math.floor(bin / 16777216), node, Screen.Top, COLOR_FG)
-            draw(Math.floor(bin / 4096), node, Screen.Mid, COLOR_FG)
-            draw(bin, node, Screen.Bottom, COLOR_FG) 
-
+             canvas.clear() 
+            drawLines(Math.floor(bin / 16777216), getCell(0))
+            drawLines(Math.floor(bin / 4096),getCell(1))
+            drawLines(bin, getCell(2))
             drawnBin = bin 
         }
-        
+        // drawLines(4095, getCell(0))
+        //     drawLines(4095,getCell(1))
+        //     drawLines(4095, getCell(2))
     }
 
-    function drawStats() {
-        let batteryBin = Math.floor(4095 * (1.0 - (battery.current / 100)))
-        draw(batteryBin, 1, Screen.Top, 0x38f2ff)
-        draw(time.utc / 1000, 1, Screen.Mid, 0xff3838)
-        draw(step.current, 1, Screen.Bottom,0x77ff38)
+    function drawYear() {
+       const bin = getYearBin()
+        if (bin != drawnBin) {
+             canvas.clear() 
+            drawLines(Math.floor(bin / 16777216), getCell(0))
+            drawLines(Math.floor(bin / 4096),getCell(1))
+            drawLines(bin, getCell(2))
+            drawnBin = bin 
+        }
     }
 
     function mapRange(value, inMin, inMax, outMin, outMax) {
@@ -467,23 +523,28 @@
 
     function drawDebug() {
         const sec = Math.floor(time.utc / 1000)
-        draw(0, 1, Screen.Top, 0x000000)
-        draw(0, 1, Screen.Mid, 0x000000)
-        draw(0, 1, Screen.Bottom,0x000000)
-
-        debugLog(0, "B: " + Math.floor(getSarosBin() / 4095).toString(radix))
+        //draw(0, 1, Screen.Top, 0x000000)
+       // draw(0, 1, Screen.Mid, 0x000000)
+       // draw(0, 1, Screen.Bottom,0x0  00000)
+        canvas.clear()
+        addDiamond(canvas, getCell(0))
+        let batteryBin = Math.floor(4095 * (1.0 - (battery.current / 100)))
+        drawLines(batteryBin, getCell(0))
+        debugLog(0, "B: " + Math.floor(getSarosBin() / 4096).toString(radix))
         debugLog(1, "U: " + sec.toString(radix))
         debugLog(2, "H: " + heart.current.toString(radix) + " (" + heartMin.toString(radix) + ":" + heartMax.toString(radix) + ")")
         debugLog(3, "S: " + step.current.toString(radix))
     }
 
     function drawHeart() {
+        
         let rate = heart.current != null ? heart.current : heart.last
         let statUpdateRate = Math.floor((60 / rate) * 1000)
        
         if (time.utc - lastStatUpdate < statUpdateRate) {
             return
         }
+         canvas.clear()
         lastStatUpdate = time.utc
         heartTicks += rate
         if (heartTicks > 4095) heartTicks = 0
@@ -499,13 +560,13 @@
             hmFS.SysProSetInt('saros_heart_min', heartMin)
         }
 
-        draw(rate, 0, Screen.Top, 0xff3838)
+        drawLines(rate, getCell(0), 0xff3838)
 
-        draw(heartTicks, 1, Screen.Mid, 0xff3838)
+        drawLines(heartTicks, getCell(1), 0xff3838)
 
         let heartBin = mapRange(rate, heartMin, heartMax, 0, 4095)
       
-        draw(Math.floor(heartBin), 2, Screen.Bottom, 0xff3838)
+        drawLines(Math.floor(heartBin), getCell(2), 0xff3838)
     }
 
     function tick() {
@@ -516,7 +577,7 @@
                 drawSaros()     
                 break;
             case 1:
-                drawStats()
+                drawYear()
                 break;
             case 2:
                 drawHeart()
