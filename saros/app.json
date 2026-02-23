@@ -1,74 +1,34 @@
 {
-  "configVersion": "v1",
   "app": {
-    "appId": 88888888,
-    "appName": "Base8",
+    "appId": 77777777,
+    "appName": "SAROS",
     "appType": "watchface",
+    "description": "SAROS CLOCK",
+    "icon": "preview_sb7.png",
+    "vender": "Dimas",
     "version": {
       "code": 1,
-      "name": "1.0" 
-    },
-    "icon": "preview.png",
-    "vender": "SWAPEROG",
-    "description": ""
+      "name": "1.0"
+    }
+  },
+  "configVersion": "v2",
+  "module": {
+    "watchface": {
+      "editable": 0,
+      "hightCost": 0,
+      "lockscreen": 1,
+      "main": 1,
+      "path": "watchface/index"
+    }
   },
   "permissions": [
-    "gps"
+    
   ],
   "runtime": {
     "apiVersion": {
       "compatible": "1.0.0",
-      "target": "1.0.1",
-      "minVersion": "1.0.0"
+      "minVersion": "1.0.0",
+      "target": "1.0.1"
     }
-  },
-  "device": {
-    "targets": [
-      "gts"
-    ],
-    "platforms": [
-      "nxp"
-    ]
-  },
-  "module": {
-    "page": {
-      "pages": [
-        "pages/index"
-      ],
-      "window": {
-        "navigationBarBackgroundColor": "#ffffff",
-        "navigationBarTextStyle": "black",
-        "navigationBarTitleText": "",
-        "backgroundColor": "#eeeeee",
-        "backgroundTextStyle": "light"
-      }
-    },
-    "app-widget": {
-      "widgets": [
-        "app-widget/index"
-      ]
-    },
-    "watch-widget": {
-      "widgets": []
-    },
-	"watchface": {
-		"path": "watchface/index",
-		"main":1,
-		"editable":1,
-		"lockscreen":1,
-		"hightCost":1
-	},
-    "app-side": {
-      "path": "app-side/index"
-    },
-    "setting": {
-      "path": "setting/index"
-    }
-  },
-  "i18n": {
-    "en-US": {
-      "name": "zepp"
-    }
-  },
-  "defaultLanguage": "en-US"
+  }
 }

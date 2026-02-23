@@ -1,26 +1,5 @@
+
 (() => {
-    
-    const diamond = [
-        {x: 2,y: 2},
-        {x: 3,y:1},
-        {x: 4,y:2},
-        {x: 5,y:3},
-        {x: 6,y:4},
-        {x: 5,y:5},
-        {x: 4,y:6},
-        {x: 3,y:7},
-        {x: 2,y:6},
-        {x: 1,y:5},
-        {x: 0,y:4},
-        {x: 1,y:3},
-    ];
-    const size = 18
-    const innerDiamond = [
-        {x: 3,y:3},
-        {x: 4,y:4},
-        {x: 3,y:5},
-        {x: 2,y:4}
-    ];
 
     let SAROS = [
         [1263539259000, 1832512139000, 2401484786000, 2970457223000, 3539418443000, 4108400891000 ],
@@ -48,7 +27,7 @@
 
     let drawnBin = 0
     let next = null
-
+    let IMG_SIZE = 96
     let nextSaros = 0
     let nextYear = 0
     let nextYearIndex = null
@@ -63,9 +42,10 @@
     let heartMax = 120
     let lastStatUpdate = 0
     let radix = 8
-    let canvas = null
-    let diamonCanvas = null
-
+   
+    let diamonds = []
+    let digitPool = {}
+   
         /**
      * @param {BigInt[]|number[]} timestamps - Sorted array of timestamps
      * @param {BigInt|number} target - The timestamp to search for
@@ -229,16 +209,13 @@
         debugBtns.forEach(t => {
             t.setProperty(hmUI.prop.VISIBLE, m == 3)
         });
-        diamonCanvas.setProperty(hmUI.prop.VISIBLE, m != 3)
+        diamonds.forEach(t => {
+            t.setProperty(hmUI.prop.VISIBLE, m != 3)
+        });
+      
         mode = m
-        canvas.clear()
+       // canvas.clear()
         tick()
-    }
-
-     function addLineToCanvas(c,a,b) {
-        c.addLine({data: [a, b ],
-            count: 2
-        })
     }
 
     function addDebugText() {
@@ -259,89 +236,96 @@
         
     }
 
-    function ImVec2(x,y) {
-        return {x:x,y:y}
+    function drawSymbols(value, cell) {
+
+      updateSymbol(value >> 0 & 7, cell, 0)
+      updateSymbol(value >> 3 & 7, cell, 1)
+      updateSymbol(value >> 6 & 7, cell, 2)
+      updateSymbol(value >> 9 & 7, cell, 3)
     }
 
-    function drawNgon(c, center, size, sides) {
-        let lines = []
-        for (let i = 0; i < sides; i++) {
-            
-            let angle = (Math.PI * 2) * (i / sides);
-            let angleNext = (Math.PI * 2) * ((i + 1) / sides);
-            let x = Math.sin(angle);
-            let y = Math.cos(angle);
-            let xn = Math.sin(angleNext);
-            let yn = Math.cos(angleNext);
-            lines.push({x: center.x + x * size, y:center.y + y * size})
-            lines.push({x: center.x + xn * size, y:center.y + yn * size})
-        }
-        c.addLine({
-            data: lines,
-            count: lines.length
+    function addDiamond(position) {
+        let center = {x: position.x + 48, y: position.y + 88}
+        let d = hmUI.createWidget(hmUI.widget.IMG, {
+            src: 'diamond.png',
+            x: center.x - IMG_SIZE / 2,
+            y: center.y - IMG_SIZE / 2,
+            w: 64,
+            h: 64,
+            angle: 0,
+            alpha: 255,
         })
-    }
-
-    function drawLines(value, position) {
-
-        for (let i = 0; i < 4; ++i) {
-            let anchor = ImVec2(position.x + innerDiamond[i].x * size + size, position.y + innerDiamond[i].y * size);
-            let prev = anchor;
-            let lines = []
-            for (let j = 0; j < 3; ++j) {
-                let bit = value >> ((3 * i) + j) & 1;
-                let d = diamond[i * 3 + j];
-                let next = ImVec2(position.x + d.x * size + size, position.y + d.y * size);
-
-            if(glyphType == 0) {
-                if (bit) {
-                    lines.push(prev);
-                    lines.push(next);
-                    prev = next;
-                }
-            }
-            else if(glyphType == 1) {
-                if (bit) {
-                        lines.push(anchor);
-                        lines.push(ImVec2(position.x + d.x * size + size, position.y + d.y * size))
-                    }
-            }
-
-                
-            }
-            if(lines.length > 0) {
-                canvas.addLine({
-                    data: lines,
-                    count: lines.length
-                })
-            }
-        }
-    }
-
-    function addDiamond(c,position) {
-        let center = {x: position.x + size * 3 + size, y: position.y + size * 4}
-
-        drawNgon(c, center, size, 4);
+        diamonds.push(d)
+        return d
     }
 
     function getCell(i) {
         switch (i) {
             case 0:
-                return {x:screenWidth / 2 - size * 4, y:0};
+                return {x:screenWidth / 2 - 32, y: screenHeight / 3 - 72};
             case 1:
-                return {x:screenWidth / 2 - size * 4, y: screenHeight / 2 - size * 4};
+                return {x:screenWidth / 2 - 32, y: screenHeight / 3 + 72};
             case 2:
-                return {x:screenWidth / 2 - size * 4, y: screenHeight - size * 8};
+                return {x:screenWidth / 2 - size * 4, y: screenHeight - size * 8 - 26};
             default:
                 return {x:0,y:0}
         }
     }
+
+    const matrices = [
+        {angle: 0, x: 0, y: -32},
+        {angle: 90, x: 48, y: 16},
+        {angle: 180, x: 0, y: 64},
+        {angle: 270, x: -48, y: 16},
+    ]
+
+    function updateSymbol(n, cellIndex, positionIndex) {
+        digitPool[cellIndex][positionIndex].setProperty(hmUI.prop.TEXT, n.toString())
+    }
+
 
     function build() {
 
         const deviceInfo = hmSetting.getDeviceInfo()
         screenWidth = deviceInfo.width
         screenHeight = deviceInfo.height
+
+ 
+
+        for (let i = 0; i < 2; i++) {
+            digitPool[i] = {}
+
+            for (let j = 0; j < 4; j++) {
+                const fontArray = [
+                "0.png",
+                j+"_1.png",
+                j+"_2.png",
+                j+"_3.png",
+                j+"_4.png",
+                j+"_5.png",
+                j+"_6.png",
+                j+"_7.png"
+                ]
+
+                let cell = getCell(i)
+                let m = matrices[j]
+                digitPool[i][j] = hmUI.createWidget(hmUI.widget.TEXT_IMG, {
+                x: cell.x + m.x,
+                y: cell.y + 24 + m.y,
+                h: 64,
+                w: 64,
+                font_array: fontArray,
+                text: '7'
+                })
+            }
+        }
+
+
+        addDiamond(getCell(0));
+        addDiamond(getCell(1));
+      //  addDiamond(getCell(2));
+
+       
         addCmd('012', cycleSaros)
         addCmd('000', () => setMode(0))
         addCmd('111', () => setMode(1))
@@ -352,7 +336,7 @@
         step = hmSensor.createSensor(hmSensor.id.STEP)
         vibrate = hmSensor.createSensor(hmSensor.id.VIBRATE)
         time = hmSensor.createSensor(hmSensor.id.TIME)
-      
+        
         heart.addEventListener(heart.event.CURRENT, onHeartChanged)
         
         heartMax = hmFS.SysProGetInt('saros_heart_max')
@@ -360,33 +344,6 @@
 
         if(!heartMax) heartMax = 120
         if(!heartMin) heartMin = 50
-        
-         canvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
-            x: 0,
-            y: 0,
-            w: screenWidth,
-            h: screenHeight,
-            line_color: 0xFFFFFF,
-            line_width: 4
-            })
-
-        diamonCanvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
-            x: 0,
-            y: 0,
-            w: screenWidth,
-            h: screenHeight,
-            line_color: 0xFFFFFF,
-            line_width: 4
-            })
-            
-        let lineCanvas = hmUI.createWidget(hmUI.widget.GRADKIENT_POLYLINE, {
-                x: 0,
-                y: 0,
-                w: screenWidth,
-                h: screenHeight,
-                line_color: 0xAAAAAAA,
-                line_width: 2
-        })
 
         let btn = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
             x: 0,
@@ -459,50 +416,40 @@
              }
         })
 
-
-        let c1 = getCell(1)
-        let c2 = getCell(2)
-
-       //addLineToCanvas(lineCanvas, {x: 0, y:c1.y - size }, {x: screenWidth, y:c1.y  - size   })
-       // addLineToCanvas(lineCanvas, {x: 0, y:c2.y- size }, {x: screenWidth, y:c2.y - size })
-
-        addDiamond(diamonCanvas, getCell(0));
-        addDiamond(diamonCanvas, getCell(1));
-        addDiamond(diamonCanvas, getCell(2));
-        canvas.clear() 
-
-        addDebugText()
-        addDebugText()
-        addDebugText()
-        addDebugText()
-        addDebugText()
+       addDebugText()
+       addDebugText()
+       addDebugText()
+       addDebugText()
+       addDebugText()
 
         setMode(0)
         tick()
+   
     }
 
     function drawSaros() {
         
         const bin = getSarosBin()
+
         if (bin != drawnBin) {
-             canvas.clear() 
-            drawLines(Math.floor(bin / 16777216), getCell(0))
-            drawLines(Math.floor(bin / 4096),getCell(1))
-            drawLines(bin, getCell(2))
+         
+            drawSymbols(Math.floor(bin / 16777216), 0)
+            drawSymbols(Math.floor(bin / 4096),1)
+          //  drawSymbols(bin, 2)
             drawnBin = bin 
         }
-        // drawLines(4095, getCell(0))
-        //     drawLines(4095,getCell(1))
-        //     drawLines(4095, getCell(2))
+
+       //  drawSymbols(4095, 0)
+       //     drawSymbols(4095,1)
     }
 
     function drawYear() {
        const bin = getYearBin()
         if (bin != drawnBin) {
-             canvas.clear() 
-            drawLines(Math.floor(bin / 16777216), getCell(0))
-            drawLines(Math.floor(bin / 4096),getCell(1))
-            drawLines(bin, getCell(2))
+           
+            drawSymbols(Math.floor(bin / 16777216), 0)
+            drawSymbols(Math.floor(bin / 4096),1)
+          //  drawSymbols(bin, 2)
             drawnBin = bin 
         }
     }
@@ -526,14 +473,15 @@
         //draw(0, 1, Screen.Top, 0x000000)
        // draw(0, 1, Screen.Mid, 0x000000)
        // draw(0, 1, Screen.Bottom,0x0  00000)
-        canvas.clear()
-        addDiamond(canvas, getCell(0))
+    
+       // diamonds[0].setProperty(hmUI.prop.VISIBLE, true)
         let batteryBin = Math.floor(4095 * (1.0 - (battery.current / 100)))
-        drawLines(batteryBin, getCell(0))
-        debugLog(0, "B: " + Math.floor(getSarosBin() / 4096).toString(radix))
-        debugLog(1, "U: " + sec.toString(radix))
-        debugLog(2, "H: " + heart.current.toString(radix) + " (" + heartMin.toString(radix) + ":" + heartMax.toString(radix) + ")")
-        debugLog(3, "S: " + step.current.toString(radix))
+        debugLog(0, "B: " + batteryBin.toString(radix))
+      //  drawSymbols(batteryBin, 0)
+        debugLog(1, "S: " + Math.floor(getSarosBin() / 4096).toString(radix))
+        debugLog(2, "U: " + sec.toString(radix))
+        debugLog(3, "H: " + heart.current.toString(radix) + " (" + heartMin.toString(radix) + ":" + heartMax.toString(radix) + ")")
+        debugLog(4, "S: " + step.current.toString(radix))
     }
 
     function drawHeart() {
@@ -544,7 +492,7 @@
         if (time.utc - lastStatUpdate < statUpdateRate) {
             return
         }
-         canvas.clear()
+     
         lastStatUpdate = time.utc
         heartTicks += rate
         if (heartTicks > 4095) heartTicks = 0
@@ -560,13 +508,13 @@
             hmFS.SysProSetInt('saros_heart_min', heartMin)
         }
 
-        drawLines(rate, getCell(0), 0xff3838)
+        drawSymbols(rate, 0)
 
-        drawLines(heartTicks, getCell(1), 0xff3838)
+        drawSymbols(heartTicks, 1)
 
-        let heartBin = mapRange(rate, heartMin, heartMax, 0, 4095)
+      //  let heartBin = mapRange(rate, heartMin, heartMax, 0, 4095)
       
-        drawLines(Math.floor(heartBin), getCell(2), 0xff3838)
+       // drawSymbols(Math.floor(heartBin), 2)
     }
 
     function tick() {
