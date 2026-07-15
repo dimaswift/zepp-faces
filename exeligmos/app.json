@@ -1,0 +1,48 @@
+{
+  "app": {
+    "appId": 77777778,
+    "appName": "EXELIGMOS",
+    "appType": "watchface",
+    "description": "10-digit Saros phase and priority Spike clock",
+    "icon": "preview_sb7.png",
+    "vender": "Dimas",
+    "version": {
+      "code": 8,
+      "name": "3.3.1"
+    }
+  },
+  "configVersion": "v2",
+  "permissions": [],
+  "runtime": {
+    "apiVersion": {
+      "compatible": "1.0.0",
+      "minVersion": "1.0.0",
+      "target": "1.0.1"
+    }
+  },
+  "targets": {
+    "sb7": {
+      "module": {
+        "watchface": {
+          "editable": 0,
+          "lockscreen": 1,
+          "main": 1,
+          "path": "watchface/index"
+        }
+      },
+      "platforms": [
+        {
+          "name": "Xiaomi Smart Band 7",
+          "deviceSource": 260
+        }
+      ],
+      "designWidth": 192
+    }
+  },
+  "i18n": {
+    "en-US": {
+      "appName": "EXELIGMOS"
+    }
+  },
+  "defaultLanguage": "en-US"
+}
