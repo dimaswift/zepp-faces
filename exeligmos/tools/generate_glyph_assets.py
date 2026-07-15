@@ -18,13 +18,12 @@ CORE_RADIUS = 41.57
 GRID_SIZE = 8.0
 PADDING_CELLS = 2.0
 
-COLORS = {
+RARITY_COLORS = {
     "white": "#FFFFFF",
     "blue": "#0A84FF",
     "purple": "#BF5AF2",
     "yellow": "#FFD60A",
     "red": "#FF453A",
-    "green": "#30D158",
 }
 
 DIM_COLORS = {
@@ -33,7 +32,6 @@ DIM_COLORS = {
     "purple": "#602D79",
     "yellow": "#806B05",
     "red": "#80231D",
-    "green": "#18692C",
 }
 
 ARROW_WIDTH = 24
@@ -246,30 +244,33 @@ def main() -> None:
 
     core, hole, arm_paths, bounds = geometry()
     generated = 1
-    for color_name, color_hex in COLORS.items():
-        color_dirs = [destination / color_name for destination in destinations]
-        for color_dir in color_dirs:
-            color_dir.mkdir(parents=True, exist_ok=True)
-            (color_dir / "rot180").mkdir(parents=True, exist_ok=True)
-        core_image = render_polygon(core, bounds, parse_color(color_hex, CORE_ALPHA), hole)
-        for color_dir in color_dirs:
-            core_image.save(color_dir / "core.png")
-            core_image.rotate(180).save(color_dir / "rot180" / "core.png")
-        generated += 2
-        for socket_index, digit_paths in enumerate(arm_paths):
-            for digit in range(1, 8):
-                arm_image = render_polygon(digit_paths[digit], bounds, parse_color(color_hex))
-                for color_dir in color_dirs:
-                    arm_image.save(color_dir / f"s{socket_index}_{digit}.png")
-                    arm_image.rotate(180).save(
-                        color_dir / "rot180" / f"s{socket_index}_{digit}.png"
-                    )
-                generated += 2
+    white_dirs = [destination / "white" for destination in destinations]
+    for white_dir in white_dirs:
+        white_dir.mkdir(parents=True, exist_ok=True)
+
+    core_image = render_polygon(core, bounds, parse_color(RARITY_COLORS["white"], CORE_ALPHA), hole)
+    for white_dir in white_dirs:
+        core_image.save(white_dir / "core.png")
+    generated += 1
+
+    # Runtime image rotation places this canonical top-socket arm at all five
+    # sockets and mirrors the complete lower glyph. Only seven digit images are
+    # needed instead of five sockets x two orientations x six colors.
+    canonical_digit_paths = arm_paths[0]
+    for digit in range(1, 8):
+        arm_image = render_polygon(
+            canonical_digit_paths[digit],
+            bounds,
+            parse_color(RARITY_COLORS["white"]),
+        )
+        for white_dir in white_dirs:
+            arm_image.save(white_dir / f"arm_{digit}.png")
+        generated += 1
 
     for destination in destinations:
         arrow_dir = destination / "arrows"
         arrow_dir.mkdir(parents=True, exist_ok=True)
-        for color_name, color_hex in COLORS.items():
+        for color_name, color_hex in RARITY_COLORS.items():
             for brightness, arrow_color in (
                 ("bright", color_hex),
                 ("dim", DIM_COLORS[color_name]),
@@ -278,7 +279,7 @@ def main() -> None:
                     render_arrow(parse_color(arrow_color), direction).save(
                         arrow_dir / f"{color_name}_{brightness}_{direction}.png"
                     )
-    generated += len(COLORS) * 2 * 2
+    generated += len(RARITY_COLORS) * 2 * 2
 
     print(f"Generated {generated} glyph layers in each of: {', '.join(map(str, destinations))}")
 
