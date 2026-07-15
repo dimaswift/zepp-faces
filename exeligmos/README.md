@@ -12,7 +12,8 @@ The face renders the current eclipse-anchored Saros phase as one ten-digit octal
 - A blue Spike overrides up to `2^3` (8) raw Spikes before and after it, purple `2^4` (16), yellow `2^5` (32), and red `2^6` (64). Suppression is symmetric, but stops at the first Spike of equal or higher rarity; only strictly lower-rarity Spikes can be overridden.
 - Four colored dots at the top show the next four raw Spike rarities in chronological order, including events that a higher-rarity Spike will override.
 - Tap the top 20% to hide or show the global-mode forecast-dot row at y=28. Visibility is remembered, while Saros 141 mode always keeps the row hidden.
-- Fixed mode applies suppression within the Saros 141 stream. Global mode merges the qualified events from all 40 series before applying the same rule.
+- Fixed mode shows the current Saros 141 phase directly. Global mode merges qualified events from all 40 series before applying the suppression rule.
+- Runtime performance: green Saros 141 rendering bypasses Spike selection, global Spike state is retained across mode switches, and the exact near-term global glyph/triangle assets are prewarmed after the first fixed-mode frame.
 
 The compact table holds one past and two future eclipse times for each of the 40 series active on 2026-07-15 (Saros 117 through 156). At the middle eclipse, the clock advances from the first interval to the second. All 40 rows have authoritative common coverage from 2026-02-17 through 2044-08-23; regenerate the snapshot rather than extrapolating eclipse times beyond it.
 

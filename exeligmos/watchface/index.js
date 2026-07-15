@@ -37,7 +37,9 @@
     const SAROS_LABEL_HALF_WIDTH = 28
     const ARROW_LABEL_WIDTH = 24
     const ARROW_LABEL_GAP = 4
-    const TICK_MILLISECONDS = ARROW_BLINK_MIN_MILLISECONDS
+    const GLOBAL_TICK_MILLISECONDS = ARROW_BLINK_MIN_MILLISECONDS
+    const FIXED_TICK_MILLISECONDS = 125
+    const GLOBAL_WARM_DELAY_MILLISECONDS = 250
 
     const RARITY_COLORS = {
         white: 0xFFFFFF,
@@ -770,9 +772,12 @@
     let glyphs = []
     let forecastDots = []
     let drawnKey = ''
-    let cachedSpikeState = null
-    let cachedStateMode = -1
-    let cachedStateComputedAtSeconds = 0
+    let cachedGlobalSpikeState = null
+    let globalStateComputedAtSeconds = 0
+    let globalWarmAfterMilliseconds = 0
+    let globalAssetsWarmedKey = ''
+    let preloadedAssetSources = {}
+    let preloadWidgets = []
     let forecastDotsVisible = true
     let arrowBright = true
     let arrowStateKey = ''
@@ -791,28 +796,44 @@
             + direction + '.png'
     }
 
-    function createGlyph(y, rotated) {
+    function createGlyph(y, rotated, address, colorName) {
         const x = Math.floor((screenWidth - GLYPH_SIZE) / 2)
+        const coreSource = colorName
+            ? glyphAsset(colorName, 'core.png', rotated)
+            : blankGlyphAsset()
         const core = hmUI.createWidget(hmUI.widget.IMG, {
             x: x,
             y: y,
             w: GLYPH_SIZE,
             h: GLYPH_SIZE,
-            src: glyphAsset('blue', 'core.png', rotated)
+            src: coreSource
         })
         const arms = []
+        const armSources = []
 
         for (let socketIndex = 0; socketIndex < GLYPH_DIGITS; socketIndex++) {
+            const digitIndex = digitIndexForSocket(socketIndex)
+            const digit = address ? parseInt(address.charAt(digitIndex), 10) : 0
+            const source = colorName && digit !== 0
+                ? glyphAsset(colorName, 's' + socketIndex + '_' + digit + '.png', rotated)
+                : blankGlyphAsset()
             arms.push(hmUI.createWidget(hmUI.widget.IMG, {
                 x: x,
                 y: y,
                 w: GLYPH_SIZE,
                 h: GLYPH_SIZE,
-                src: blankGlyphAsset()
+                src: source
             }))
+            armSources.push(source)
         }
 
-        return { core: core, arms: arms, rotated: rotated }
+        return {
+            core: core,
+            arms: arms,
+            rotated: rotated,
+            coreSource: coreSource,
+            armSources: armSources
+        }
     }
 
     function digitIndexForSocket(socketIndex) {
@@ -820,9 +841,11 @@
     }
 
     function updateGlyph(glyph, address, colorName) {
-        glyph.core.setProperty(hmUI.prop.MORE, {
-            src: glyphAsset(colorName, 'core.png', glyph.rotated)
-        })
+        const coreSource = glyphAsset(colorName, 'core.png', glyph.rotated)
+        if (glyph.coreSource !== coreSource) {
+            glyph.core.setProperty(hmUI.prop.SRC, coreSource)
+            glyph.coreSource = coreSource
+        }
 
         for (let socketIndex = 0; socketIndex < GLYPH_DIGITS; socketIndex++) {
             const digitIndex = digitIndexForSocket(socketIndex)
@@ -830,8 +853,66 @@
             const source = digit === 0
                 ? blankGlyphAsset()
                 : glyphAsset(colorName, 's' + socketIndex + '_' + digit + '.png', glyph.rotated)
-            glyph.arms[socketIndex].setProperty(hmUI.prop.MORE, { src: source })
+            if (glyph.armSources[socketIndex] !== source) {
+                glyph.arms[socketIndex].setProperty(hmUI.prop.SRC, source)
+                glyph.armSources[socketIndex] = source
+            }
         }
+    }
+
+    function glyphLayerSources(address, colorName, rotated) {
+        const sources = [glyphAsset(colorName, 'core.png', rotated)]
+        for (let socketIndex = 0; socketIndex < GLYPH_DIGITS; socketIndex++) {
+            const digitIndex = digitIndexForSocket(socketIndex)
+            const digit = parseInt(address.charAt(digitIndex), 10)
+            if (digit !== 0) {
+                sources.push(glyphAsset(
+                    colorName,
+                    's' + socketIndex + '_' + digit + '.png',
+                    rotated
+                ))
+            }
+        }
+        return sources
+    }
+
+    function preloadAsset(source) {
+        if (preloadedAssetSources[source]) {
+            return
+        }
+        preloadedAssetSources[source] = true
+        preloadWidgets.push(hmUI.createWidget(hmUI.widget.IMG, {
+            x: Math.floor(screenWidth / 2),
+            y: Math.floor(screenHeight / 2),
+            w: 1,
+            h: 1,
+            alpha: 0,
+            src: source
+        }))
+    }
+
+    function prewarmGlobalAssets(state, nowSeconds) {
+        const colorName = state.spike.rarity
+        const key = state.spike.saros + ':' + state.spike.eventSeconds + ':' + colorName
+        if (key === globalAssetsWarmedKey) {
+            return
+        }
+
+        const offsets = [0, 1, 5]
+        for (let offsetIndex = 0; offsetIndex < offsets.length; offsetIndex++) {
+            const reading = readingForSeries(state.spike.seriesIndex, nowSeconds + offsets[offsetIndex])
+            if (reading === null) {
+                continue
+            }
+            const sources = glyphLayerSources(reading.address.slice(0, 5), colorName, false)
+                .concat(glyphLayerSources(reading.address.slice(5, 10), colorName, true))
+            for (let sourceIndex = 0; sourceIndex < sources.length; sourceIndex++) {
+                preloadAsset(sources[sourceIndex])
+            }
+        }
+        preloadAsset(arrowAsset(colorName, state.direction, true))
+        preloadAsset(arrowAsset(colorName, state.direction, false))
+        globalAssetsWarmedKey = key
     }
 
     function updateForecastDots(forecast) {
@@ -844,45 +925,38 @@
         }
     }
 
-    function activeSpikeState(nowSeconds) {
-        const cacheExpired = cachedSpikeState === null
-            || cachedStateMode !== displayMode
-            || nowSeconds < cachedStateComputedAtSeconds
-            || nowSeconds >= cachedSpikeState.validUntilSeconds
+    function activeGlobalSpikeState(nowSeconds) {
+        const cacheExpired = cachedGlobalSpikeState === null
+            || nowSeconds < globalStateComputedAtSeconds
+            || nowSeconds >= cachedGlobalSpikeState.validUntilSeconds
 
         if (cacheExpired) {
-            cachedSpikeState = displayMode === MODE_FIXED
-                ? spikeStateForSeries(seriesIndexForSaros(FIXED_SAROS), nowSeconds, SPIKE_PREFIX_DEPTH)
-                : globalSpikeState(nowSeconds, SPIKE_PREFIX_DEPTH)
-            cachedStateMode = displayMode
-            cachedStateComputedAtSeconds = nowSeconds
+            cachedGlobalSpikeState = globalSpikeState(nowSeconds, SPIKE_PREFIX_DEPTH)
+            globalStateComputedAtSeconds = nowSeconds
+            globalAssetsWarmedKey = ''
         }
 
-        return cachedSpikeState
+        return cachedGlobalSpikeState
     }
 
     function selectDisplay(nowSeconds) {
-        const state = activeSpikeState(nowSeconds)
-        if (state === null) {
-            return null
-        }
-
         if (displayMode === MODE_FIXED) {
             const seriesIndex = seriesIndexForSaros(FIXED_SAROS)
             const reading = readingForSeries(seriesIndex, nowSeconds)
-            if (reading === null || state === null) {
+            if (reading === null) {
                 return null
             }
             return {
                 reading: reading,
-                spike: state.spike,
-                direction: state.direction,
-                forecast: state.forecast,
                 colorName: 'green',
-                blinkIntervalMilliseconds: arrowBlinkIntervalMilliseconds(state, nowSeconds)
+                forecast: []
             }
         }
 
+        const state = activeGlobalSpikeState(nowSeconds)
+        if (state === null) {
+            return null
+        }
         const reading = readingForSeries(state.spike.seriesIndex, nowSeconds)
         if (reading === null) {
             return null
@@ -894,6 +968,16 @@
             forecast: state.forecast,
             colorName: state.spike.rarity,
             blinkIntervalMilliseconds: arrowBlinkIntervalMilliseconds(state, nowSeconds)
+        }
+    }
+
+    function maybeWarmGlobalState(nowSeconds, nowMilliseconds) {
+        if (displayMode !== MODE_FIXED || nowMilliseconds < globalWarmAfterMilliseconds) {
+            return
+        }
+        const state = activeGlobalSpikeState(nowSeconds)
+        if (state !== null) {
+            prewarmGlobalAssets(state, nowSeconds)
         }
     }
 
@@ -938,31 +1022,46 @@
         const forecastKey = display.forecast.map(spike => spike.eventSeconds + ':' + spike.rarity).join(',')
         const key = display.reading.saros + '-' + address + '-' + colorName + '-'
             + display.direction + '-' + forecastKey + '-' + displayMode
+        const nowMilliseconds = Date.now()
 
         // Use the runtime clock for sub-second animation; the TIME sensor is
         // still the source of truth for Saros phase/event calculations.
-        updateArrow(display, Date.now(), force)
+        if (displayMode === MODE_CLOSEST_SPIKE) {
+            updateArrow(display, nowMilliseconds, force)
+        }
         if (!force && key === drawnKey) {
+            maybeWarmGlobalState(nowSeconds, nowMilliseconds)
             return
         }
 
         updateGlyph(glyphs[0], address.slice(0, 5), colorName)
         updateGlyph(glyphs[1], address.slice(5, 10), colorName)
-        updateForecastDots(display.forecast)
         if (displayMode === MODE_CLOSEST_SPIKE) {
+            updateForecastDots(display.forecast)
             sarosLabel.setProperty(hmUI.prop.TEXT, String(display.reading.saros))
             sarosLabel.setProperty(hmUI.prop.COLOR, RARITY_COLORS[colorName])
         }
         drawnKey = key
+        maybeWarmGlobalState(nowSeconds, nowMilliseconds)
     }
 
     function toggleMode() {
         displayMode = displayMode === MODE_FIXED ? MODE_CLOSEST_SPIKE : MODE_FIXED
         hmFS.SysProSetInt(MODE_STORAGE_KEY, displayMode)
-        cachedSpikeState = null
         drawnKey = ''
         applyModeVisibility()
         tick(true)
+        restartTickTimer()
+    }
+
+    function restartTickTimer() {
+        if (timerId) {
+            timer.stopTimer(timerId)
+        }
+        const period = displayMode === MODE_FIXED
+            ? FIXED_TICK_MILLISECONDS
+            : GLOBAL_TICK_MILLISECONDS
+        timerId = timer.createTimer(0, period, () => tick(false), {})
     }
 
     function applyModeVisibility() {
@@ -985,6 +1084,11 @@
     }
 
     function build() {
+        // Spike state survives WatchFace onDestroy/onInit cycles in this module.
+        // Texture widgets do not, so rebuild only the lightweight preload set.
+        globalAssetsWarmedKey = ''
+        preloadedAssetSources = {}
+        preloadWidgets = []
         const deviceInfo = hmSetting.getDeviceInfo()
         screenWidth = deviceInfo.width
         screenHeight = deviceInfo.height
@@ -994,6 +1098,9 @@
         displayMode = storedMode === MODE_CLOSEST_SPIKE ? MODE_CLOSEST_SPIKE : MODE_FIXED
         const storedDotVisibility = hmFS.SysProGetInt(DOT_VISIBILITY_STORAGE_KEY)
         forecastDotsVisible = storedDotVisibility !== DOTS_STORED_HIDDEN
+        const initialDisplay = selectDisplay(time.utc / 1000)
+        const initialAddress = initialDisplay ? initialDisplay.reading.address : ''
+        const initialColorName = initialDisplay ? initialDisplay.colorName : null
 
         const centerY = Math.floor(screenHeight / 2)
         sarosLabel = hmUI.createWidget(hmUI.widget.TEXT, {
@@ -1014,7 +1121,7 @@
             y: centerY - Math.floor(LABEL_HEIGHT / 2),
             w: ARROW_LABEL_WIDTH,
             h: LABEL_HEIGHT,
-            src: arrowAsset('blue', 'future', true)
+            src: blankGlyphAsset()
         })
 
         const dotRowWidth = FORECAST_DOT_COUNT * FORECAST_DOT_SIZE
@@ -1034,31 +1141,37 @@
 
         const firstGlyphY = centerY - GLYPH_SIZE - GLYPH_DIVIDER_HALF_GAP
         const secondGlyphY = centerY + GLYPH_DIVIDER_HALF_GAP
-        glyphs = [createGlyph(firstGlyphY, false), createGlyph(secondGlyphY, true)]
+        glyphs = [
+            createGlyph(firstGlyphY, false, initialAddress.slice(0, 5), initialColorName),
+            createGlyph(secondGlyphY, true, initialAddress.slice(5, 10), initialColorName)
+        ]
 
+        // Fully transparent image widgets preserve the two explicit hit zones
+        // without the borders some devices render for STROKE_RECT widgets.
         const touchZones = touchZoneLayout(screenHeight)
-        topTapTarget = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
+        topTapTarget = hmUI.createWidget(hmUI.widget.IMG, {
             x: 0,
             y: touchZones.topY,
             w: screenWidth,
             h: touchZones.topHeight,
-            radius: 0,
-            color: 0x000000
+            alpha: 0,
+            src: blankGlyphAsset()
         })
         topTapTarget.addEventListener(hmUI.event.CLICK_DOWN, toggleForecastDots)
-        bottomTapTarget = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
+        bottomTapTarget = hmUI.createWidget(hmUI.widget.IMG, {
             x: 0,
             y: touchZones.bottomY,
             w: screenWidth,
             h: touchZones.bottomHeight,
-            radius: 0,
-            color: 0x000000
+            alpha: 0,
+            src: blankGlyphAsset()
         })
         bottomTapTarget.addEventListener(hmUI.event.CLICK_DOWN, toggleMode)
 
         applyModeVisibility()
+        globalWarmAfterMilliseconds = Date.now() + GLOBAL_WARM_DELAY_MILLISECONDS
         tick(true)
-        timerId = timer.createTimer(0, TICK_MILLISECONDS, () => tick(false), {})
+        restartTickTimer()
     }
 
     var __$$app$$__ = __$$hmAppManager$$__.currentApp
@@ -1068,7 +1181,10 @@
             build()
         },
         onDestroy() {
-            timerId && timer.stopTimer(timerId)
+            if (timerId) {
+                timer.stopTimer(timerId)
+                timerId = null
+            }
         }
     })
 })()
