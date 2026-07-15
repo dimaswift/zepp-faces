@@ -12,6 +12,13 @@ assert.equal(model.MIN_SPIKE_REPEAT_LENGTH, 5)
 assert.equal(model.SPIKE_PREFIX_DEPTH, 5)
 assert.equal(model.MAX_SUPPRESSION_DISTANCE, 64)
 assert.equal(model.FORECAST_DOT_COUNT, 4)
+assert.equal(model.TOUCH_ZONE_FRACTION, 0.2)
+assert.deepEqual(model.touchZoneLayout(490), {
+    topY: 0,
+    topHeight: 98,
+    bottomY: 392,
+    bottomHeight: 98
+})
 assert.equal(model.ARROW_BLINK_MIN_MILLISECONDS, 66)
 assert.equal(model.ARROW_BLINK_MAX_MILLISECONDS, 4240)
 assert.equal(model.SERIES_COUNT, 40)

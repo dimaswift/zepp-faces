@@ -31,7 +31,7 @@
     const FORECAST_DOT_SIZE = 8
     const FORECAST_DOT_GAP = 8
     const FORECAST_DOT_Y = 28
-    const DOUBLE_TAP_MILLISECONDS = 350
+    const TOUCH_ZONE_FRACTION = 0.2
     const ARROW_BLINK_MIN_MILLISECONDS = 66
     const ARROW_BLINK_MAX_MILLISECONDS = 4240
     const SAROS_LABEL_HALF_WIDTH = 28
@@ -95,6 +95,16 @@
 
     function clamp(value, lower, upper) {
         return Math.min(Math.max(value, lower), upper)
+    }
+
+    function touchZoneLayout(height) {
+        const zoneHeight = Math.floor(height * TOUCH_ZONE_FRACTION)
+        return {
+            topY: 0,
+            topHeight: zoneHeight,
+            bottomY: height - zoneHeight,
+            bottomHeight: zoneHeight
+        }
     }
 
     function positiveModulo(value, modulus) {
@@ -710,12 +720,14 @@
             SPIKE_PREFIX_DEPTH: SPIKE_PREFIX_DEPTH,
             MAX_SUPPRESSION_DISTANCE: MAX_SUPPRESSION_DISTANCE,
             FORECAST_DOT_COUNT: FORECAST_DOT_COUNT,
+            TOUCH_ZONE_FRACTION: TOUCH_ZONE_FRACTION,
             ARROW_BLINK_MIN_MILLISECONDS: ARROW_BLINK_MIN_MILLISECONDS,
             ARROW_BLINK_MAX_MILLISECONDS: ARROW_BLINK_MAX_MILLISECONDS,
             FIRST_SAROS: FIRST_SAROS,
             SERIES_COUNT: SERIES_COUNT,
             SAROS_ECLIPSE_SECONDS: SAROS_ECLIPSE_SECONDS,
             octalAddress: octalAddress,
+            touchZoneLayout: touchZoneLayout,
             seriesIndexForSaros: seriesIndexForSaros,
             eclipseTriplet: eclipseTriplet,
             intervalForSeries: intervalForSeries,
@@ -753,7 +765,8 @@
     let screenHeight = 0
     let sarosLabel = null
     let arrowImage = null
-    let tapTarget = null
+    let topTapTarget = null
+    let bottomTapTarget = null
     let glyphs = []
     let forecastDots = []
     let drawnKey = ''
@@ -761,7 +774,6 @@
     let cachedStateMode = -1
     let cachedStateComputedAtSeconds = 0
     let forecastDotsVisible = true
-    let lastTapMilliseconds = 0
     let arrowBright = true
     let arrowStateKey = ''
     let arrowLastToggleMilliseconds = 0
@@ -825,9 +837,10 @@
     function updateForecastDots(forecast) {
         for (let index = 0; index < FORECAST_DOT_COUNT; index++) {
             const colorName = forecast[index] ? forecast[index].rarity : null
-            forecastDots[index].setProperty(hmUI.prop.MORE, {
-                color: colorName ? RARITY_COLORS[colorName] : 0x000000
-            })
+            forecastDots[index].setProperty(
+                hmUI.prop.COLOR,
+                colorName ? RARITY_COLORS[colorName] : 0x000000
+            )
         }
     }
 
@@ -936,10 +949,10 @@
         updateGlyph(glyphs[0], address.slice(0, 5), colorName)
         updateGlyph(glyphs[1], address.slice(5, 10), colorName)
         updateForecastDots(display.forecast)
-        sarosLabel.setProperty(hmUI.prop.MORE, {
-            text: String(display.reading.saros),
-            color: RARITY_COLORS[colorName]
-        })
+        if (displayMode === MODE_CLOSEST_SPIKE) {
+            sarosLabel.setProperty(hmUI.prop.TEXT, String(display.reading.saros))
+            sarosLabel.setProperty(hmUI.prop.COLOR, RARITY_COLORS[colorName])
+        }
         drawnKey = key
     }
 
@@ -948,7 +961,18 @@
         hmFS.SysProSetInt(MODE_STORAGE_KEY, displayMode)
         cachedSpikeState = null
         drawnKey = ''
+        applyModeVisibility()
         tick(true)
+    }
+
+    function applyModeVisibility() {
+        const showGlobalOverlay = displayMode === MODE_CLOSEST_SPIKE
+        sarosLabel.setProperty(hmUI.prop.VISIBLE, showGlobalOverlay)
+        arrowImage.setProperty(hmUI.prop.VISIBLE, showGlobalOverlay)
+        const showDots = showGlobalOverlay && forecastDotsVisible
+        for (let index = 0; index < forecastDots.length; index++) {
+            forecastDots[index].setProperty(hmUI.prop.VISIBLE, showDots)
+        }
     }
 
     function toggleForecastDots() {
@@ -957,25 +981,7 @@
             DOT_VISIBILITY_STORAGE_KEY,
             forecastDotsVisible ? DOTS_STORED_VISIBLE : DOTS_STORED_HIDDEN
         )
-        for (let index = 0; index < forecastDots.length; index++) {
-            forecastDots[index].setProperty(hmUI.prop.VISIBLE, forecastDotsVisible)
-        }
-    }
-
-    function handleTap() {
-        const nowMilliseconds = Date.now()
-        if (lastTapMilliseconds > 0
-            && nowMilliseconds - lastTapMilliseconds <= DOUBLE_TAP_MILLISECONDS) {
-            lastTapMilliseconds = 0
-            // The first tap already changed mode; restore it so a double-tap
-            // affects only the forecast-dot visibility.
-            toggleMode()
-            toggleForecastDots()
-            return
-        }
-
-        lastTapMilliseconds = nowMilliseconds
-        toggleMode()
+        applyModeVisibility()
     }
 
     function build() {
@@ -1022,8 +1028,7 @@
                 w: FORECAST_DOT_SIZE,
                 h: FORECAST_DOT_SIZE,
                 radius: Math.floor(FORECAST_DOT_SIZE / 2),
-                color: RARITY_COLORS.white,
-                visible: forecastDotsVisible
+                color: RARITY_COLORS.white
             }))
         }
 
@@ -1031,16 +1036,27 @@
         const secondGlyphY = centerY + GLYPH_DIVIDER_HALF_GAP
         glyphs = [createGlyph(firstGlyphY, false), createGlyph(secondGlyphY, true)]
 
-        tapTarget = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
+        const touchZones = touchZoneLayout(screenHeight)
+        topTapTarget = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
             x: 0,
-            y: 0,
+            y: touchZones.topY,
             w: screenWidth,
-            h: screenHeight,
+            h: touchZones.topHeight,
             radius: 0,
             color: 0x000000
         })
-        tapTarget.addEventListener(hmUI.event.CLICK_DOWN, handleTap)
+        topTapTarget.addEventListener(hmUI.event.CLICK_DOWN, toggleForecastDots)
+        bottomTapTarget = hmUI.createWidget(hmUI.widget.STROKE_RECT, {
+            x: 0,
+            y: touchZones.bottomY,
+            w: screenWidth,
+            h: touchZones.bottomHeight,
+            radius: 0,
+            color: 0x000000
+        })
+        bottomTapTarget.addEventListener(hmUI.event.CLICK_DOWN, toggleMode)
 
+        applyModeVisibility()
         tick(true)
         timerId = timer.createTimer(0, TICK_MILLISECONDS, () => tick(false), {})
     }
