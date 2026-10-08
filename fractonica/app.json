@@ -1,0 +1,48 @@
+{
+  "app": {
+    "appId": 77777779,
+    "appName": "FRACTONICA",
+    "appType": "watchface",
+    "description": "Fractonica Saros 141 harmonic clock with solar reference",
+    "icon": "preview_sb7.png",
+    "vender": "Dimas",
+    "version": {
+      "code": 1,
+      "name": "1.0.0"
+    }
+  },
+  "configVersion": "v2",
+  "permissions": [],
+  "runtime": {
+    "apiVersion": {
+      "compatible": "1.0.0",
+      "minVersion": "1.0.0",
+      "target": "1.0.1"
+    }
+  },
+  "targets": {
+    "sb7": {
+      "module": {
+        "watchface": {
+          "editable": 0,
+          "lockscreen": 1,
+          "main": 1,
+          "path": "watchface/index"
+        }
+      },
+      "platforms": [
+        {
+          "name": "Xiaomi Smart Band 7",
+          "deviceSource": 260
+        }
+      ],
+      "designWidth": 192
+    }
+  },
+  "i18n": {
+    "en-US": {
+      "appName": "FRACTONICA"
+    }
+  },
+  "defaultLanguage": "en-US"
+}
