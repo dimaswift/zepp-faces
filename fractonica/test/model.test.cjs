@@ -60,7 +60,7 @@ assert.ok(checked > 4000)
 const anchor = model.ECLIPSES_TT[20]
 assert.equal(new Date((anchor - model.TT_MINUS_UTC_SECONDS) * 1000).toISOString().slice(0, 10), '1973-12-24')
 const atAnchor = model.solarAt(anchor + 1)
-assert.deepEqual([atAnchor.sync, atAnchor.day, atAnchor.index, atAnchor.drift], [0, 0, 0, 0])
+assert.deepEqual([atAnchor.sync, atAnchor.digits, atAnchor.drift], [0, [0, 0, 0], 0])
 
 const level = model.SOLAR_LEVEL
 const p = clock.prefix(level)
@@ -74,15 +74,27 @@ const solar = model.solarAt(now)
 const exactSyncStart = F.number(clock.timestampAt(F.rational((625625n + 19n * BigInt(solar.sync)) * 4n, p)))
 assert.ok(Math.abs(solar.syncStart - exactSyncStart) < 1e-3)
 assert.ok(solar.syncStart <= now && now - solar.syncStart < 4 * 86400)
-assert.equal(solar.day, Math.floor((now - solar.syncStart) / 86400))
+const exactSyncEnd = F.number(clock.timestampAt(F.rational((625625n + 19n * BigInt(solar.sync + 1)) * 4n, p)))
+assert.ok(Math.abs(solar.syncEnd - exactSyncEnd) < 1e-3)
+// Three-glyph odometer: 16^3 steps over the sync period.
+assert.deepEqual([model.SOLAR_STROKES, model.SOLAR_DIGITS, model.SOLAR_STATES], [2, 3, 16])
+const steps = Math.floor((now - solar.syncStart) / (solar.syncEnd - solar.syncStart) * 4096)
+assert.deepEqual(solar.digits, [Math.floor(steps / 256), Math.floor(steps / 16) % 16, steps % 16])
 // The sync starts exactly where a depth-7 cycle starts: local index of the
 // depth-7 glyph is congruent, bin 0, and solar glyph bin 0.
 const startPosition = model.positionAt(solar.syncStart + 0.5)
 assert.equal(model.phaseAt(startPosition, level).index, 0)
-assert.equal(model.solarAt(solar.syncStart + 0.5).index, 0)
-assert.equal(model.solarAt(solar.syncStart + 0.5).day, 0)
-assert.equal(model.solarAt(solar.syncStart - 0.5).day, 3)
-assert.equal(model.solarAt(solar.syncStart - 0.5).index, 15)
+assert.deepEqual(model.solarAt(solar.syncStart + 0.5).digits, [0, 0, 0])
+assert.deepEqual(model.solarAt(solar.syncStart - 0.5).digits, [15, 15, 15])
+// Left glyph: 4 states per day (6 h each).
+assert.deepEqual(model.solarAt(solar.syncStart + 86400 + 60).digits.slice(0, 1), [4])
+// Solar thresholds: quarters of the sync period, about one day each.
+const quarter = (solar.syncEnd - solar.syncStart) / 4
+assert.deepEqual(model.solarThreshold(model.solarAt(solar.syncStart + 10)),
+    { name: 'Peak', tt: solar.syncStart + quarter })
+assert.equal(model.solarThreshold(model.solarAt(solar.syncStart + 2.5 * quarter)).name, 'Valley')
+assert.equal(model.solarThreshold(model.solarAt(solar.syncEnd - 1)).tt, solar.syncEnd)
+assert.ok(Math.abs(quarter - 86400) < 3)
 
 // Sync clock: the anchor eclipse's own time of day (15:02:44 TT, 15:01:35
 // with today's TT - UTC) in UTC and in two zones.
@@ -140,10 +152,46 @@ assert.deepEqual(model.periodName(25), { letter: 0, suffix: '1' })
 assert.deepEqual(model.periodName(50), { letter: 1, suffix: '2' })
 assert.equal(model.GREEK.length, 24)
 
-assert.deepEqual(model.solarDotCenters(96, 245), [{ x: 129, y: 254 }, { x: 96, y: 302 }, { x: 63, y: 254 }])
-assert.deepEqual(model.letterSlotCenters(192), [37, 155])
-assert.equal(model.ringDotCenters(0, 0, 4).length, 3)
-assert.deepEqual(model.ringDotCenters(0, 0, 4)[1], { x: 0, y: 60 })
+// Glyph states: 0..m, falling branch dotted, -m, then rising undotted.
+const states = (m) => Array.from({ length: 4 * m }, (_, i) => model.glyphState(i, m))
+    .map((s) => s.value + (s.dotted ? '•' : '')).join(' ')
+assert.equal(states(4), '0 1 2 3 4 3• 2• 1• 0• -1• -2• -3• -4 -3 -2 -1')
+for (let i = 0; i < 16; i++) {
+    assert.equal(model.glyphState(i, 4).value, Number(clock.phaseAt(F.rational(BigInt(2 * i + 1), 8n), 0).value))
+}
+assert.deepEqual(model.glyphState(13, 13), { value: 13, dotted: false })
+assert.deepEqual(model.glyphState(26, 13), { value: 0, dotted: true })
+assert.deepEqual(model.glyphState(39, 13), { value: -13, dotted: false })
+
+// Counter arcs: n dots, symmetric about the centre line, left to right.
+const layout = model.layoutFor(192, 490)
+const top = model.arcDotCenters(layout.arcs[0], 11)
+assert.equal(top.length, 11)
+assert.deepEqual(top[5], { x: 96, y: 10 })
+for (let k = 0; k < 11; k++) {
+    assert.equal(top[k].x + top[10 - k].x, 192)
+    assert.equal(top[k].y, top[10 - k].y)
+}
+const bottom = model.arcDotCenters(layout.arcs[1], 9)
+assert.deepEqual(bottom[4], { x: 96, y: 480 })
+assert.ok(bottom[0].x < bottom[8].x)
+assert.deepEqual(layout.solarGlyphs, [{ x: 6, y: 200 }, { x: 70, y: 200 }, { x: 134, y: 200 }])
+assert.deepEqual(layout.periodGlyphs[0], [{ x: 30, y: 35 }, { x: 110, y: 35 }])
+
+// Sub glyph: 16 states inside each major bin, matching fractonica at 16x
+// the resolution (level + 16 bins = a level-L cycle split into 256).
+for (let i = 0; i < 40; i++) {
+    const t = Math.round(now + (random() - 0.5) * 2e8) + 0.5
+    for (const level of [6, 7, 9]) {
+        const mine = model.subPhaseAt(model.positionAt(t), level)
+        const exact = clock.positionAt(F.rational(BigInt(2 * t), 2n))
+        const scaled = exact.numerator * clock.prefix(level) * 64n
+        const fine = scaled / exact.denominator
+        assert.equal(mine.sub, Number(fine % 16n), `sub, level ${level}`)
+        assert.equal(model.phaseAt(model.positionAt(t), level).index, Number((fine / 16n) % 16n))
+    }
+}
+assert.deepEqual(layout.letters, [{ x: 96, y: 155 }, { x: 96, y: 335 }])
 
 console.log(`ok: ${checked} glyph checks; per-sync drift ${perSyncDrift.toFixed(4)} s; `
-    + `now sync #${solar.sync}, day ${solar.day + 1}, sync at ${model.syncClockText(solar.syncStart, 0)} UTC`)
+    + `now sync #${solar.sync}, solar ${solar.digits.join('/')}, sync at ${model.syncClockText(solar.syncStart, 0)} UTC`)

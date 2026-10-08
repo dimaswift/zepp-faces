@@ -38,40 +38,58 @@
     // 2017-01-01; update if a new leap second is announced.
     const TT_MINUS_UTC_SECONDS = 37 + 32.184
 
+
     // Solar reference. 19 depth-7 cycles (~5.05 h each) are almost exactly
     // four days. The first eclipse of Alpha 6 (ordinal 20, 1973-12-24) is
-    // the zero "midnight"; every 19th depth-7 boundary after it is a sync
-    // midnight. Each sync lands 19 * T7 - 4 * 86400 seconds away from the
-    // exact 4-day grid, and that offset accumulates (≈ -10.06 s per sync
-    // with the catalogue intervals: the depth-7 grid runs slightly short).
+    // the zero sync point; every 19th depth-7 boundary after it is the next
+    // sync. Each sync lands 19 * T7 - 4 * 86400 seconds away from the exact
+    // 4-day grid, and that offset accumulates (about -10.06 s per sync with
+    // the catalogue intervals: the depth-7 grid runs slightly short).
     const SOLAR_LEVEL = 6
     const SOLAR_ANCHOR_ORDINAL = 20
     const SOLAR_CYCLES_PER_SYNC = 19
     const SOLAR_DAYS_PER_SYNC = 4
     const DAY_SECONDS = 86400
+    // The sync period is shown as an odometer of SOLAR_DIGITS glyphs with
+    // SOLAR_STROKES strokes each: the left glyph steps through the states of
+    // the whole period, and each glyph to its right runs a full cycle inside
+    // one state of its left neighbour. A glyph of s strokes has extreme value
+    // m = (3^s - 1) / 2 and 4m states (16 for two strokes, 52 for three).
+    // Three two-stroke glyphs: 6 h, 22.5 min and 84 s per state.
+    const SOLAR_STROKES = 2
+    const SOLAR_DIGITS = 3
+    const SOLAR_EXTREME = (Math.pow(3, SOLAR_STROKES) - 1) / 2
+    const SOLAR_STATES = 4 * SOLAR_EXTREME
 
     const MIN_TOP_DEPTH = 2
     const MAX_TOP_DEPTH = 11
     const DEFAULT_TOP_DEPTH = 7
     const DEPTH_STORAGE_KEY = 'fractonica_top_depth'
 
+    // Glyph images: 10 px per CBT unit; the stem (x = 0) is on the pixel
+    // column centre GLYPH_STEM_X, and the drawing's vertical centre on row
+    // *_CENTER_Y (2.05 units for two strokes, 3.475 for three).
     const GLYPH_W = 53
-    const GLYPH_H = 90
-    // Glyph x = 0 (the stem) sits at this pixel column centre, and the
-    // vertical centre of the CBT drawing (y = 2.05 units) at this row.
     const GLYPH_STEM_X = 26
-    const GLYPH_CENTER_Y = 45
+    const GLYPH2_H = 90
+    const GLYPH2_CENTER_Y = 45
+    const GLYPH3_H = 120
+    const GLYPH3_CENTER_Y = 59
+    // Each period is a major/sub glyph pair. Strokes reach 2.15 units
+    // (21.5 px) either side of a stem, so stems 80 px apart leave a 37 px gap.
+    const PAIR_STEM_SPACING = 80
+    // Three solar glyphs fit the 192 px width only up to about 64 px apart.
+    const SOLAR_STEM_SPACING = { 2: 80, 3: 64 }[SOLAR_DIGITS]
+    const PERIOD_GLYPH_OFFSET = 165
+    const LETTER_OFFSET = 90
     const DOT_SIZE = 7
-    const RING_RADIUS = 60
-    const RING_SPACING = 155
-    const MAX_RING_DOTS = 12
+    // Period counters sit on arcs concentric with the screen's rounded ends.
+    const ARC_INSET = 10
+    const ARC_STEP_DEGREES = 11.5
+    const MAX_ARC_DOTS = 13
     const LABEL_HEIGHT = 20
-    const SYNC_COLOR = 0xFFD60A
-    const THRESHOLD_COLOR = 0x4FD1C5
-    // Info labels above and below the solar glyph; the lower one clears the
-    // bottom day dot.
-    const INFO_LABEL_OFFSET = 65
-    const SYNC_LABEL_OFFSET = 68
+    const SOLAR_COLOR = 0xFFD60A
+    const PERIOD_COLOR = 0x4FD1C5
     const INFO_MILLISECONDS = 4000
     const LETTER_MILLISECONDS = 1500
     const DOUBLE_TAP_MILLISECONDS = 400
@@ -82,14 +100,6 @@
     const LETTER_H = 28
     const SUB_W = 9
     const SUB_H = 14
-    // Glyph strokes reach at most 2.15 units (21.5 px) either side of the
-    // stem; letters sit midway between that reach and the screen edge.
-    const GLYPH_HALF_REACH = 21.5
-    // Solar day dots, clockwise from the right (day 2, 3, 4), relative to
-    // the glyph centre. Side dots sit level with the lower crossbar (CBT
-    // y = 3, pixel row centre + 9); the bottom one mirrors the glyph's own
-    // derivative dot: 1.75 units past the stem end (y = 7.75, centre + 57).
-    const SOLAR_DOT_OFFSETS = [{ x: 33, y: 9 }, { x: 0, y: 57 }, { x: -33, y: 9 }]
     const TOUCH_ZONE_FRACTION = 1 / 3
     const MIN_TICK_MILLISECONDS = 50
     const MAX_TICK_MILLISECONDS = 1000
@@ -168,6 +178,29 @@
         }
     }
 
+    // The sub glyph runs one full 16-state cycle inside each major bin: its
+    // state is the bin index at 16x the major resolution.
+    function subPhaseAt(position, level) {
+        const units = prefix(level) * 4 * BINS_PER_CYCLE
+        const fine = position.ordinal * units + Math.floor(position.fraction * units)
+        return { sub: positiveModulo(fine, BINS_PER_CYCLE) }
+    }
+
+    // Glyph state for bin `index` of a cycle whose extreme value is `m`
+    // (4 for two strokes, 13 for three): 0 .. m, then the falling branch
+    // m-1 .. -(m-1) dotted, then -m, then -(m-1) .. -1. Same values as
+    // clock.phaseAt; the dot marks the falling branch so repeated values
+    // read undotted rising, dotted falling.
+    function glyphState(index, m) {
+        if (index <= m) {
+            return { value: index, dotted: false }
+        }
+        if (index < 3 * m) {
+            return { value: 2 * m - index, dotted: true }
+        }
+        return { value: index - 4 * m, dotted: false }
+    }
+
     function solarAt(tt) {
         const position = positionAt(tt)
         if (position === null) {
@@ -181,17 +214,34 @@
         const sync = Math.floor((cycle - anchorCycle) / SOLAR_CYCLES_PER_SYNC)
         // Sync boundary position = (anchorCycle + 19 * sync) * 4 / P(6).
         const syncStart = timestampAtRational((anchorCycle + SOLAR_CYCLES_PER_SYNC * sync) * 4, p)
+        const syncEnd = timestampAtRational((anchorCycle + SOLAR_CYCLES_PER_SYNC * (sync + 1)) * 4, p)
         const nominalStart = ECLIPSES_TT[SOLAR_ANCHOR_ORDINAL]
             + sync * SOLAR_DAYS_PER_SYNC * DAY_SECONDS
-        const elapsed = tt - syncStart
-        const day = Math.min(Math.max(Math.floor(elapsed / DAY_SECONDS), 0), SOLAR_DAYS_PER_SYNC - 1)
-        const dayPhase = (elapsed - day * DAY_SECONDS) / DAY_SECONDS
+        const phase = (tt - syncStart) / (syncEnd - syncStart)
+        const steps = Math.pow(SOLAR_STATES, SOLAR_DIGITS)
+        let step = Math.min(Math.max(Math.floor(phase * steps), 0), steps - 1)
+        const digits = []
+        for (let i = 0; i < SOLAR_DIGITS; i++) {
+            digits.unshift(step % SOLAR_STATES)
+            step = Math.floor(step / SOLAR_STATES)
+        }
         return {
             sync: sync,
             syncStart: syncStart,
+            syncEnd: syncEnd,
             drift: syncStart - nominalStart,
-            day: day,
-            index: Math.min(Math.max(Math.floor(dayPhase * BINS_PER_CYCLE), 0), BINS_PER_CYCLE - 1)
+            phase: phase,
+            // Glyph states, left (whole period) to right (finest).
+            digits: digits
+        }
+    }
+
+    // Next quarter boundary of the sync period (each quarter is ~1 day).
+    function solarThreshold(solar) {
+        const quarter = Math.min(Math.floor(solar.phase * 4), 3)
+        return {
+            name: THRESHOLD_NAMES[quarter],
+            tt: solar.syncStart + (quarter + 1) / 4 * (solar.syncEnd - solar.syncStart)
         }
     }
 
@@ -269,34 +319,62 @@
         return Math.min(Math.max(depth, MIN_TOP_DEPTH), MAX_TOP_DEPTH)
     }
 
-    // Refresh several times per glyph bin of the finer displayed level.
+    // Refresh several times per sub glyph state of the finer displayed level.
     function tickMilliseconds(level) {
         const sarosSeconds = ECLIPSES_TT[23] - ECLIPSES_TT[22]
-        const binMilliseconds = 4 * sarosSeconds * 1000 / prefix(level) / BINS_PER_CYCLE
+        const binMilliseconds = 4 * sarosSeconds * 1000 / prefix(level) / BINS_PER_CYCLE / BINS_PER_CYCLE
         return Math.min(Math.max(Math.floor(binMilliseconds / 8), MIN_TICK_MILLISECONDS), MAX_TICK_MILLISECONDS)
     }
 
-    // Dot k (0-based) of n - 1 sits at clock angle 360 * (k + 1) / n; the
-    // empty 12 o'clock slot is the first period of the parent.
-    function ringDotCenters(cx, cy, siblings) {
+    // n counter dots on the arc, spread symmetrically about its centre line,
+    // left to right. Dot k stands for period k of the parent.
+    function arcDotCenters(arc, n) {
         const centers = []
-        for (let k = 0; k < siblings - 1; k++) {
-            const angle = 2 * Math.PI * (k + 1) / siblings
+        for (let k = 0; k < n; k++) {
+            const angle = (k - (n - 1) / 2) * ARC_STEP_DEGREES * Math.PI / 180
             centers.push({
-                x: Math.round(cx + RING_RADIUS * Math.sin(angle)),
-                y: Math.round(cy - RING_RADIUS * Math.cos(angle))
+                x: Math.round(arc.cx + arc.radius * Math.sin(angle)),
+                y: Math.round(arc.cy + arc.dir * arc.radius * Math.cos(angle))
             })
         }
         return centers
     }
 
-    function solarDotCenters(cx, cy) {
-        return SOLAR_DOT_OFFSETS.map((o) => ({ x: cx + o.x, y: cy + o.y }))
-    }
-
-    function letterSlotCenters(screenWidth) {
-        const left = Math.round((screenWidth / 2 - GLYPH_HALF_REACH) / 2)
-        return [left, screenWidth - left]
+    // Screen layout. The band is a pill: its rounded ends are semicircles of
+    // radius width / 2, and the counter arcs sit ARC_INSET inside them.
+    function layoutFor(width, height) {
+        const cx = Math.floor(width / 2)
+        const cy = Math.floor(height / 2)
+        const radius = cx - ARC_INSET
+        // A centred row of glyphs, stems `spacing` apart.
+        const row = (centerY, count, spacing, glyphCenterY) => Array.from({ length: count }, (_, i) => ({
+            x: cx + Math.round((i - (count - 1) / 2) * spacing) - GLYPH_STEM_X,
+            y: centerY - glyphCenterY
+        }))
+        // Major glyph left, sub glyph right.
+        const pair = (centerY, glyphCenterY) => row(centerY, 2, PAIR_STEM_SPACING, glyphCenterY)
+        return {
+            cx: cx,
+            cy: cy,
+            periodGlyphs: [
+                pair(cy - PERIOD_GLYPH_OFFSET, GLYPH2_CENTER_Y),
+                pair(cy + PERIOD_GLYPH_OFFSET, GLYPH2_CENTER_Y)
+            ],
+            solarGlyphs: row(cy, SOLAR_DIGITS, SOLAR_STEM_SPACING,
+                SOLAR_STROKES === 3 ? GLYPH3_CENTER_Y : GLYPH2_CENTER_Y),
+            arcs: [
+                { cx: cx, cy: cx, radius: radius, dir: -1 },
+                { cx: cx, cy: height - cx, radius: radius, dir: 1 }
+            ],
+            // Letters and info labels share the gaps above and below the
+            // solar glyphs; the labels replace the letters while shown.
+            letters: [{ x: cx, y: cy - LETTER_OFFSET }, { x: cx, y: cy + LETTER_OFFSET }],
+            labels: {
+                period: cy - LETTER_OFFSET - (LABEL_HEIGHT >> 1),
+                solar: cy + LETTER_OFFSET - LABEL_HEIGHT - 1,
+                sync: cy + LETTER_OFFSET + 1
+            }
+        }
     }
 
     if (typeof module !== 'undefined' && module.exports) {
@@ -307,17 +385,25 @@
             SOLAR_LEVEL,
             SOLAR_ANCHOR_ORDINAL,
             SOLAR_CYCLES_PER_SYNC,
+            SOLAR_STROKES,
+            SOLAR_DIGITS,
+            SOLAR_EXTREME,
+            SOLAR_STATES,
             DEFAULT_TOP_DEPTH,
             MIN_TOP_DEPTH,
             MAX_TOP_DEPTH,
+            GREEK,
+            DOT_SIZE,
             prefix,
             siblingCount,
             ttFromUtcMilliseconds,
             positionAt,
             timestampAtRational,
             phaseAt,
+            glyphState,
+            subPhaseAt,
             solarAt,
-            GREEK,
+            solarThreshold,
             nextThreshold,
             periodName,
             utcOffsetSeconds,
@@ -326,10 +412,8 @@
             thresholdText,
             clampTopDepth,
             tickMilliseconds,
-            ringDotCenters,
-            solarDotCenters,
-            letterSlotCenters,
-            layout: { GLYPH_STEM_X, GLYPH_CENTER_Y, DOT_SIZE, RING_RADIUS, RING_SPACING }
+            arcDotCenters,
+            layoutFor
         }
     }
 
@@ -342,10 +426,12 @@
     let topDepth = DEFAULT_TOP_DEPTH
     let screenWidth = 0
     let screenHeight = 0
-    let rings = []
-    let solarRing = null
+    let layout = null
+    let periods = []
+    let solarGlyphs = []
+    let periodThresholdLabel = null
+    let solarThresholdLabel = null
     let syncLabel = null
-    let thresholdLabel = null
     let infoHideAt = 0
     let letterSlots = []
     let lettersPersistent = false
@@ -356,71 +442,58 @@
         return 'fx/' + name + '.png'
     }
 
-    function createRing(cy, color, dotCount) {
-        const cx = Math.floor(screenWidth / 2)
-        const glyph = hmUI.createWidget(hmUI.widget.IMG, {
-            x: cx - GLYPH_STEM_X,
-            y: cy - GLYPH_CENTER_Y,
-            w: GLYPH_W,
-            h: GLYPH_H,
-            src: asset(color + '_0')
-        })
+    function image(x, y, w, h, src) {
+        return hmUI.createWidget(hmUI.widget.IMG, { x: x, y: y, w: w, h: h, src: src })
+    }
+
+    function setSource(holder, source) {
+        if (holder.source !== source) {
+            holder.widget.setProperty(hmUI.prop.SRC, source)
+            holder.source = source
+        }
+    }
+
+    function createPeriod(i) {
         const dots = []
-        for (let k = 0; k < dotCount; k++) {
-            dots.push(hmUI.createWidget(hmUI.widget.IMG, {
-                x: cx,
-                y: cy,
-                w: DOT_SIZE,
-                h: DOT_SIZE,
-                src: asset(color + '_dot_off')
-            }))
+        for (let k = 0; k < MAX_ARC_DOTS; k++) {
+            dots.push({ widget: image(0, 0, DOT_SIZE, DOT_SIZE, asset('teal_dot_off')), source: '' })
+            dots[k].widget.setProperty(hmUI.prop.VISIBLE, false)
         }
         return {
-            cx: cx,
-            cy: cy,
-            color: color,
-            glyph: glyph,
-            glyphSource: '',
+            arc: layout.arcs[i],
+            glyphs: layout.periodGlyphs[i].map((at) =>
+                ({ widget: image(at.x, at.y, GLYPH_W, GLYPH2_H, asset('teal_0')), source: '' })),
             dots: dots,
-            dotSources: dots.map(() => ''),
             siblings: 0
         }
     }
 
-    function layoutRing(ring, siblings) {
-        if (ring.siblings === siblings) {
+    function layoutPeriod(period, siblings) {
+        if (period.siblings === siblings) {
             return
         }
-        const centers = ring.color === 'yellow'
-            ? solarDotCenters(ring.cx, ring.cy)
-            : ringDotCenters(ring.cx, ring.cy, siblings)
-        for (let k = 0; k < ring.dots.length; k++) {
+        const centers = arcDotCenters(period.arc, siblings)
+        for (let k = 0; k < period.dots.length; k++) {
             const visible = k < centers.length
             if (visible) {
-                ring.dots[k].setProperty(hmUI.prop.MORE, {
+                period.dots[k].widget.setProperty(hmUI.prop.MORE, {
                     x: centers[k].x - (DOT_SIZE >> 1),
                     y: centers[k].y - (DOT_SIZE >> 1),
                     w: DOT_SIZE,
                     h: DOT_SIZE
                 })
             }
-            ring.dots[k].setProperty(hmUI.prop.VISIBLE, visible)
+            period.dots[k].widget.setProperty(hmUI.prop.VISIBLE, visible)
         }
-        ring.siblings = siblings
+        period.siblings = siblings
     }
 
-    function drawRing(ring, index, local) {
-        const glyphSource = asset(ring.color + '_' + index)
-        if (glyphSource !== ring.glyphSource) {
-            ring.glyph.setProperty(hmUI.prop.SRC, glyphSource)
-            ring.glyphSource = glyphSource
-        }
-        for (let k = 0; k < ring.siblings - 1; k++) {
-            const source = asset(ring.color + (k < local ? '_dot_on' : '_dot_off'))
-            if (source !== ring.dotSources[k]) {
-                ring.dots[k].setProperty(hmUI.prop.SRC, source)
-                ring.dotSources[k] = source
-            }
+    // Dots up to and including the current period are lit.
+    function drawPeriod(period, phase, sub) {
+        setSource(period.glyphs[0], asset('teal_' + phase.index))
+        setSource(period.glyphs[1], asset('teal_' + sub.sub))
+        for (let k = 0; k < period.siblings; k++) {
+            setSource(period.dots[k], asset(k <= phase.local ? 'teal_dot_on' : 'teal_dot_off'))
         }
     }
 
@@ -433,24 +506,26 @@
         if (position === null) {
             return
         }
-        for (let i = 0; i < rings.length; i++) {
-            const phase = phaseAt(position, topDepth - 1 + i)
-            layoutRing(rings[i], phase.siblings)
-            drawRing(rings[i], phase.index, phase.local)
+        for (let i = 0; i < periods.length; i++) {
+            const level = topDepth - 1 + i
+            const phase = phaseAt(position, level)
+            layoutPeriod(periods[i], phase.siblings)
+            drawPeriod(periods[i], phase, subPhaseAt(position, level))
         }
         const solar = solarAt(tt)
-        drawRing(solarRing, solar.index, solar.day)
+        for (let i = 0; i < solarGlyphs.length; i++) {
+            setSource(solarGlyphs[i], asset('sun_' + solar.digits[i]))
+        }
         if (infoHideAt) {
             if (time.utc >= infoHideAt) {
-                setInfoVisible(false)
-                infoHideAt = 0
+                hideInfo()
             } else {
-                drawInfo(tt, position, solar)
+                drawInfo(position, solar)
             }
         }
         if (lettersHideAt && time.utc >= lettersHideAt) {
             lettersHideAt = 0
-            setLettersVisible(lettersPersistent)
+            refreshLetters()
         }
     }
 
@@ -465,16 +540,19 @@
         return utcOffsetSeconds(time.utc, time, fallback)
     }
 
-    function drawInfo(tt, position, solar) {
+    function drawInfo(position, solar) {
         const offset = localOffsetSeconds()
+        const now = time.utc / 1000
+        periodThresholdLabel.setProperty(hmUI.prop.TEXT,
+            thresholdText(nextThreshold(position, topDepth - 1), now, offset))
+        solarThresholdLabel.setProperty(hmUI.prop.TEXT, thresholdText(solarThreshold(solar), now, offset))
         syncLabel.setProperty(hmUI.prop.TEXT, syncClockText(solar.syncStart, offset))
-        const threshold = nextThreshold(position, topDepth - 1)
-        thresholdLabel.setProperty(hmUI.prop.TEXT, thresholdText(threshold, time.utc / 1000, offset))
     }
 
     function setInfoVisible(visible) {
+        periodThresholdLabel.setProperty(hmUI.prop.VISIBLE, visible)
+        solarThresholdLabel.setProperty(hmUI.prop.VISIBLE, visible)
         syncLabel.setProperty(hmUI.prop.VISIBLE, visible)
-        thresholdLabel.setProperty(hmUI.prop.VISIBLE, visible)
     }
 
     function showInfo() {
@@ -483,13 +561,20 @@
         if (position === null) {
             return
         }
-        drawInfo(tt, position, solarAt(tt))
-        setInfoVisible(true)
+        drawInfo(position, solarAt(tt))
         infoHideAt = time.utc + INFO_MILLISECONDS
+        setInfoVisible(true)
+        refreshLetters()
     }
 
-    // Single tap: sync time and next threshold for a few seconds.
-    // Double tap: also toggles persistent period letters.
+    function hideInfo() {
+        infoHideAt = 0
+        setInfoVisible(false)
+        refreshLetters()
+    }
+
+    // Single tap: thresholds and sync time for a few seconds.
+    // Double tap: toggles persistent period letters.
     function onMiddleTap() {
         if (!time || !time.utc) {
             return
@@ -500,20 +585,21 @@
             lettersPersistent = !lettersPersistent
             hmFS.SysProSetInt(LETTERS_STORAGE_KEY, lettersPersistent ? LETTERS_STORED_ON : LETTERS_STORED_OFF)
             lettersHideAt = 0
-            setLettersVisible(lettersPersistent)
+            hideInfo()
             return
         }
         lastMiddleTapAt = now
         showInfo()
     }
 
-    function createLetterSlot(centerX, centerY) {
-        const widget = (w, h, src) => hmUI.createWidget(hmUI.widget.IMG, { x: centerX, y: centerY, w: w, h: h, src: src })
+    function createLetterSlot(center) {
         return {
-            centerX: centerX,
-            centerY: centerY,
-            letter: widget(LETTER_W, LETTER_H, asset('greek_0')),
-            subs: [widget(SUB_W, SUB_H, asset('sub_0')), widget(SUB_W, SUB_H, asset('sub_0'))],
+            center: center,
+            letter: image(center.x, center.y, LETTER_W, LETTER_H, asset('greek_0')),
+            subs: [
+                image(center.x, center.y, SUB_W, SUB_H, asset('sub_0')),
+                image(center.x, center.y, SUB_W, SUB_H, asset('sub_0'))
+            ],
             suffix: ''
         }
     }
@@ -521,8 +607,8 @@
     function layoutLetterSlot(slot, depth) {
         const name = periodName(depth)
         const width = LETTER_W + name.suffix.length * SUB_W
-        const left = slot.centerX - Math.floor(width / 2)
-        const top = slot.centerY - (LETTER_H >> 1)
+        const left = slot.center.x - Math.floor(width / 2)
+        const top = slot.center.y - (LETTER_H >> 1)
         slot.letter.setProperty(hmUI.prop.MORE, { x: left, y: top, w: LETTER_W, h: LETTER_H, src: asset('greek_' + name.letter) })
         for (let i = 0; i < slot.subs.length; i++) {
             if (i < name.suffix.length) {
@@ -538,7 +624,10 @@
         slot.suffix = name.suffix
     }
 
-    function setLettersVisible(visible) {
+    // Letters show while persistent or briefly after a depth change, and
+    // give way to the info labels, which use the same gaps.
+    function refreshLetters() {
+        const visible = !infoHideAt && (lettersPersistent || lettersHideAt > 0)
         for (let i = 0; i < letterSlots.length; i++) {
             const slot = letterSlots[i]
             slot.letter.setProperty(hmUI.prop.VISIBLE, visible)
@@ -548,7 +637,7 @@
         }
     }
 
-    // Left: the top (longer) period; right: the bottom (shorter) one.
+    // Top: the longer period, under the top glyph; bottom: the shorter one.
     function updateLetters() {
         layoutLetterSlot(letterSlots[0], topDepth)
         layoutLetterSlot(letterSlots[1], topDepth + 1)
@@ -569,8 +658,12 @@
         topDepth = next
         hmFS.SysProSetInt(DEPTH_STORAGE_KEY, topDepth)
         updateLetters()
-        setLettersVisible(true)
         lettersHideAt = lettersPersistent ? 0 : time.utc + LETTER_MILLISECONDS
+        if (infoHideAt) {
+            hideInfo()
+        } else {
+            refreshLetters()
+        }
         tick()
         restartTickTimer()
     }
@@ -592,18 +685,15 @@
         const deviceInfo = hmSetting.getDeviceInfo()
         screenWidth = deviceInfo.width
         screenHeight = deviceInfo.height
+        layout = layoutFor(screenWidth, screenHeight)
         time = hmSensor.createSensor(hmSensor.id.TIME)
         const storedDepth = hmFS.SysProGetInt(DEPTH_STORAGE_KEY)
         topDepth = storedDepth ? clampTopDepth(storedDepth) : DEFAULT_TOP_DEPTH
         lettersPersistent = hmFS.SysProGetInt(LETTERS_STORAGE_KEY) === LETTERS_STORED_ON
 
-        const centerY = Math.floor(screenHeight / 2)
-        rings = [
-            createRing(centerY - RING_SPACING, 'teal', MAX_RING_DOTS),
-            createRing(centerY + RING_SPACING, 'teal', MAX_RING_DOTS)
-        ]
-        solarRing = createRing(centerY, 'yellow', SOLAR_DAYS_PER_SYNC - 1)
-        layoutRing(solarRing, SOLAR_DAYS_PER_SYNC)
+        periods = [createPeriod(0), createPeriod(1)]
+        solarGlyphs = layout.solarGlyphs.map((at) =>
+            ({ widget: image(at.x, at.y, GLYPH_W, SOLAR_STROKES === 3 ? GLYPH3_H : GLYPH2_H, asset('sun_0')), source: '' }))
 
         const label = (y, color) => hmUI.createWidget(hmUI.widget.TEXT, {
             x: 0,
@@ -617,19 +707,16 @@
             text_style: hmUI.text_style.NONE,
             text: ''
         })
-        // On tap: the top glyph's next threshold above the solar glyph and
-        // the local time of the current sync point below it.
-        thresholdLabel = label(centerY - INFO_LABEL_OFFSET - LABEL_HEIGHT, THRESHOLD_COLOR)
-        syncLabel = label(centerY + SYNC_LABEL_OFFSET, SYNC_COLOR)
+        // On tap: the top glyph's next threshold above the solar glyphs; the
+        // solar period's next threshold and the sync time below them.
+        periodThresholdLabel = label(layout.labels.period, PERIOD_COLOR)
+        solarThresholdLabel = label(layout.labels.solar, SOLAR_COLOR)
+        syncLabel = label(layout.labels.sync, SOLAR_COLOR)
         setInfoVisible(false)
 
-        letterSlots = [
-            // Same row as the solar side dots.
-            createLetterSlot(letterSlotCenters(screenWidth)[0], centerY + SOLAR_DOT_OFFSETS[0].y),
-            createLetterSlot(letterSlotCenters(screenWidth)[1], centerY + SOLAR_DOT_OFFSETS[0].y)
-        ]
+        letterSlots = layout.letters.map(createLetterSlot)
         updateLetters()
-        setLettersVisible(lettersPersistent)
+        refreshLetters()
 
         const zoneHeight = Math.floor(screenHeight * TOUCH_ZONE_FRACTION)
         createTapZone(0, zoneHeight, () => setTopDepth(topDepth - 1))
