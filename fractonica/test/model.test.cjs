@@ -84,11 +84,13 @@ assert.equal(model.solarAt(solar.syncStart + 0.5).day, 0)
 assert.equal(model.solarAt(solar.syncStart - 0.5).day, 3)
 assert.equal(model.solarAt(solar.syncStart - 0.5).index, 15)
 
-assert.equal(model.midnightClockText(0), '00:00:00')
-assert.equal(model.midnightClockText(-10.0224), '23:59:50')
-assert.equal(model.midnightClockText(-48445.2), '10:32:35')
-// Constant for the whole sync, independent of the instant inside it.
-assert.equal(model.solarAt(solar.syncStart + 1).drift, model.solarAt(solar.syncStart + 4 * 86400 - 20).drift)
+// Sync clock: the anchor eclipse's own time of day (15:02:44 TT, 15:01:35
+// with today's TT - UTC) in UTC and in two zones.
+assert.equal(model.syncClockText(anchor, 0), '15:01:35')
+assert.equal(model.syncClockText(anchor, 3 * 3600), '18:01:35')
+assert.equal(model.syncClockText(anchor, -16 * 3600), '23:01:35')
+assert.equal(model.syncClockText(solar.syncStart, 0),
+    new Date(Math.round(solar.syncStart - model.TT_MINUS_UTC_SECONDS) * 1000).toISOString().slice(11, 19))
 // One full lap: the drift first passes -86400 s in February 2067.
 let lap = model.solarAt(anchor + 1)
 while (lap.drift > -86400) lap = model.solarAt(lap.syncStart + 4 * 86400)
@@ -96,8 +98,52 @@ assert.equal(new Date((lap.syncStart - model.TT_MINUS_UTC_SECONDS) * 1000).toISO
 // Sync midnights step ~10 s earlier on the wall clock each sync.
 const step = (model.solarAt(solar.syncStart + 4 * 86400).syncStart - solar.syncStart) - 4 * 86400
 assert.ok(step < -10 && step > -10.2)
+
+// Next threshold matches fractonica's cycle events (firstPeak, middleNode,
+// oppositePeak, end).
+const eventNames = { firstPeak: 'Peak', middleNode: 'Node', oppositePeak: 'Valley', end: 'End' }
+for (let i = 0; i < 60; i++) {
+    const t = Math.round(now + (random() - 0.5) * 3e9)
+    for (const level of [1, 4, 6, 7, 9]) {
+        const exact = clock.positionAt(F.rational(BigInt(t)))
+        const cycle = clock.periodAt(exact, level)
+        const next = cycle.events.find((e) => e.name !== 'begin' && F.number(e.time) > t)
+        const mine = model.nextThreshold(model.positionAt(t), level)
+        assert.equal(mine.name, eventNames[next.name], `threshold name, level ${level}`)
+        assert.ok(Math.abs(mine.tt - F.number(next.time)) < 1e-3, `threshold time, level ${level}`)
+    }
+}
+
+// Offset: trust the watch's wall clock unless it is implausible.
+const at = Date.parse('2026-10-08T23:30:00Z')
+const wall = (y, mo, d, h, mi, s) => ({ year: y, month: mo, day: d, hour: h, minute: mi, second: s })
+assert.equal(model.utcOffsetSeconds(at, wall(2026, 10, 9, 1, 30, 0), 0), 2 * 3600)
+assert.equal(model.utcOffsetSeconds(at, wall(2026, 10, 8, 16, 30, 0), 0), -7 * 3600)
+assert.equal(model.utcOffsetSeconds(at, wall(2026, 10, 9, 5, 15, 0), 0), 5.75 * 3600)
+assert.equal(model.utcOffsetSeconds(at, wall(2022, 8, 25, 9, 30, 45), 10800), 10800) // frozen simulator clock
+
+// Civil dates and threshold text.
+assert.deepEqual(model.wallClock(Date.parse('2024-02-29T23:59:59Z') / 1000, 0),
+    { days: 19782, year: 2024, month: 2, day: 29, time: '23:59:59' })
+assert.equal(model.wallClock(Date.parse('2024-02-29T23:59:59Z') / 1000, 1).day, 1)
+const nowUtc = Date.parse('2026-10-08T12:00:00Z') / 1000
+const tt = (iso) => Date.parse(iso) / 1000 + model.TT_MINUS_UTC_SECONDS
+assert.equal(model.thresholdText({ name: 'Peak', tt: tt('2026-10-08T14:32:05Z') }, nowUtc, 0), 'Peak 14:32:05')
+assert.equal(model.thresholdText({ name: 'Node', tt: tt('2026-10-08T22:10:00Z') }, nowUtc, 3 * 3600), 'Node Oct 9 01:10')
+assert.equal(model.thresholdText({ name: 'End', tt: tt('2026-12-01T09:00:00Z') }, nowUtc, 0), 'End Dec 1 09:00')
+
+// Period names: depth 1 is alpha; after omega the letters repeat with a suffix.
+assert.deepEqual(model.periodName(1), { letter: 0, suffix: '' })
+assert.deepEqual(model.periodName(7), { letter: 6, suffix: '' }) // eta
+assert.deepEqual(model.periodName(24), { letter: 23, suffix: '' }) // omega
+assert.deepEqual(model.periodName(25), { letter: 0, suffix: '1' })
+assert.deepEqual(model.periodName(50), { letter: 1, suffix: '2' })
+assert.equal(model.GREEK.length, 24)
+
+assert.deepEqual(model.solarDotCenters(96, 245), [{ x: 129, y: 254 }, { x: 96, y: 302 }, { x: 63, y: 254 }])
+assert.deepEqual(model.letterSlotCenters(192), [37, 155])
 assert.equal(model.ringDotCenters(0, 0, 4).length, 3)
 assert.deepEqual(model.ringDotCenters(0, 0, 4)[1], { x: 0, y: 60 })
 
 console.log(`ok: ${checked} glyph checks; per-sync drift ${perSyncDrift.toFixed(4)} s; `
-    + `now sync #${solar.sync}, day ${solar.day + 1}, midnight at ${model.midnightClockText(solar.drift)}`)
+    + `now sync #${solar.sync}, day ${solar.day + 1}, sync at ${model.syncClockText(solar.syncStart, 0)} UTC`)

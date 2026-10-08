@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 'use strict'
 
-// Prerender the 16 two-stroke Fractonica phase glyphs and the period dots as
-// pixel-aligned PNGs. Glyph geometry comes verbatim from fractonica.js
-// (clock.glyphSVG); this script only re-frames, recolours and rasterises it.
+// Prerender the 16 two-stroke Fractonica phase glyphs, the period dots and the
+// Greek period letters as pixel-aligned PNGs. Glyph strokes come verbatim
+// from fractonica.js (clock.glyphSVG); this script re-frames, recolours and
+// rasterises them, and moves the derivative dot (see DOTTED_BINS).
 //
 //   node tools/generate_assets.cjs [--fractonica path/to/fractonica.js]
 //
@@ -33,6 +34,20 @@ const GLYPH_H = Math.round(VIEW_H * UNIT)
 const DOT_SIZE = 7
 const DOT_RADIUS = 3
 
+// Each repeated value appears twice per cycle (1 2 3 rising and falling,
+// 0 at start and middle, -3 -2 -1 falling and rising). The library dots the
+// rising occurrence; the face dots the second occurrence instead, so a cycle
+// reads undotted first, dotted second. Extremes (bins 4 and 12) stay bare.
+const DOTTED_BINS = new Set([5, 6, 7, 8, 13, 14, 15])
+
+const LETTER_FONT = '/System/Library/Fonts/Supplemental/Arial Unicode.ttf'
+const LETTER_W = 20
+const LETTER_H = 28
+const LETTER_POINTS = 24
+const SUB_W = 9
+const SUB_H = 14
+const SUB_POINTS = 13
+
 const COLORS = {
     teal: { on: '#4FD1C5', off: '#1E4F4A' },
     yellow: { on: '#FFD60A', off: '#5C4D04' }
@@ -52,10 +67,12 @@ function rasterise(svg, file) {
     fs.unlinkSync(tmp)
 }
 
-function reframeGlyph(svg, color) {
+function reframeGlyph(svg, color, dot) {
     const source = /stroke="([^"]+)"/.exec(svg)[1]
     return svg
         .replace(/<title>.*?<\/title>/, '')
+        .replace(/<circle [^>]*\/>/, '')
+        .replace('</svg>', (dot || '') + '</svg>')
         .replace(/ width="[^"]*"/, ` width="${GLYPH_W}"`)
         .replace(/ height="[^"]*"/, ` height="${GLYPH_H}"`)
         .replace(/ viewBox="[^"]*"/, ` viewBox="${VIEW_X} ${VIEW_Y} ${VIEW_W} ${VIEW_H}"`)
@@ -66,6 +83,12 @@ function dotSvg(color) {
     const c = DOT_SIZE / 2
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${DOT_SIZE}" height="${DOT_SIZE}">`
         + `<circle cx="${c}" cy="${c}" r="${DOT_RADIUS}" fill="${color}"/></svg>`
+}
+
+function renderText(text, w, h, points, color, file) {
+    execFileSync('magick', ['-size', `${w}x${h}`, 'xc:none', '-font', LETTER_FONT,
+        '-pointsize', String(points), '-fill', color, '-gravity', 'center',
+        '-annotate', '+0+0', text, '-depth', '8', file])
 }
 
 // Store preview: the face as it looked at a fixed instant (default depths).
@@ -88,7 +111,10 @@ function writePreview(dir) {
     const place = (file, x, y) => args.push(path.join(dir, file), '-geometry', `+${x}+${y}`, '-composite')
     for (const ring of rings) {
         place(`${ring.color}_${ring.phase.index}.png`, cx - GLYPH_STEM_X, ring.cy - GLYPH_CENTER_Y)
-        model.ringDotCenters(cx, ring.cy, ring.phase.siblings).forEach((c, k) => {
+        const centers = ring.color === 'yellow'
+            ? model.solarDotCenters(cx, ring.cy)
+            : model.ringDotCenters(cx, ring.cy, ring.phase.siblings)
+        centers.forEach((c, k) => {
             const state = k < ring.phase.local ? 'on' : 'off'
             place(`${ring.color}_dot_${state}.png`, c.x - (DOT_SIZE >> 1), c.y - (DOT_SIZE >> 1))
         })
@@ -116,6 +142,9 @@ function main() {
         }
         glyphs.push({ index, svg: clock.glyphSVG(position, level), value: Number(phase.value) })
     }
+    // The library's derivative dot, taken from bin 0 (which it dots).
+    const dot = /<circle [^>]*\/>/.exec(glyphs[0].svg)[0]
+    const model = require('../watchface/index.js')
 
     const blank = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>'
     for (const out of OUTPUT_DIRS) {
@@ -123,12 +152,18 @@ function main() {
         fs.mkdirSync(dir, { recursive: true })
         for (const [name, color] of Object.entries(COLORS)) {
             for (const glyph of glyphs) {
-                rasterise(reframeGlyph(glyph.svg, color.on), path.join(dir, `${name}_${glyph.index}.png`))
+                const glyphDot = DOTTED_BINS.has(glyph.index) ? dot : ''
+                rasterise(reframeGlyph(glyph.svg, color.on, glyphDot), path.join(dir, `${name}_${glyph.index}.png`))
             }
             rasterise(dotSvg(color.on), path.join(dir, `${name}_dot_on.png`))
             rasterise(dotSvg(color.off), path.join(dir, `${name}_dot_off.png`))
         }
         rasterise(blank, path.join(dir, 'blank.png'))
+        model.GREEK.forEach((letter, i) =>
+            renderText(letter, LETTER_W, LETTER_H, LETTER_POINTS, COLORS.teal.on, path.join(dir, `greek_${i}.png`)))
+        for (let digit = 0; digit < 10; digit++) {
+            renderText(String(digit), SUB_W, SUB_H, SUB_POINTS, COLORS.teal.on, path.join(dir, `sub_${digit}.png`))
+        }
     }
 
     writePreview(path.join(ROOT, 'assets/fx'))

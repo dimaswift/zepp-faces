@@ -7,6 +7,13 @@
     // spans 4 / P(L) Saros units and has 16 glyph bins. Depth N is level N - 1.
     const SEQUENCE = [5, 13, 5, 5, 7, 11, 9, 4]
     const BINS_PER_CYCLE = 16
+    // Period names by depth: depth 1 is alpha. After omega the alphabet
+    // repeats with a numeric suffix (alpha1, beta1, ...).
+    const GREEK = ['α', 'β', 'γ', 'δ', 'ε', 'ζ', 'η', 'θ', 'ι', 'κ', 'λ', 'μ',
+        'ν', 'ξ', 'ο', 'π', 'ρ', 'σ', 'τ', 'υ', 'φ', 'χ', 'ψ', 'ω']
+    // Quarter boundaries of a cycle, as in clock.period() events.
+    const THRESHOLD_NAMES = ['Peak', 'Node', 'Valley', 'End']
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
     // Solar Saros 141 greatest eclipses, TT seconds since 1970-01-01 TT
     // (fractonica.js DEFAULT_ECLIPSES). Index = recurrence ordinal.
@@ -58,9 +65,31 @@
     const RING_RADIUS = 60
     const RING_SPACING = 155
     const MAX_RING_DOTS = 12
-    const MIDNIGHT_LABEL_HEIGHT = 20
-    const MIDNIGHT_COLOR = 0xFFD60A
-    const MIDNIGHT_LABEL_MILLISECONDS = 4000
+    const LABEL_HEIGHT = 20
+    const SYNC_COLOR = 0xFFD60A
+    const THRESHOLD_COLOR = 0x4FD1C5
+    // Info labels above and below the solar glyph; the lower one clears the
+    // bottom day dot.
+    const INFO_LABEL_OFFSET = 65
+    const SYNC_LABEL_OFFSET = 68
+    const INFO_MILLISECONDS = 4000
+    const LETTER_MILLISECONDS = 1500
+    const DOUBLE_TAP_MILLISECONDS = 400
+    const LETTERS_STORAGE_KEY = 'fractonica_letters'
+    const LETTERS_STORED_ON = 1
+    const LETTERS_STORED_OFF = 2
+    const LETTER_W = 20
+    const LETTER_H = 28
+    const SUB_W = 9
+    const SUB_H = 14
+    // Glyph strokes reach at most 2.15 units (21.5 px) either side of the
+    // stem; letters sit midway between that reach and the screen edge.
+    const GLYPH_HALF_REACH = 21.5
+    // Solar day dots, clockwise from the right (day 2, 3, 4), relative to
+    // the glyph centre. Side dots sit level with the lower crossbar (CBT
+    // y = 3, pixel row centre + 9); the bottom one mirrors the glyph's own
+    // derivative dot: 1.75 units past the stem end (y = 7.75, centre + 57).
+    const SOLAR_DOT_OFFSETS = [{ x: 33, y: 9 }, { x: 0, y: 57 }, { x: -33, y: 9 }]
     const TOUCH_ZONE_FRACTION = 1 / 3
     const MIN_TICK_MILLISECONDS = 50
     const MAX_TICK_MILLISECONDS = 1000
@@ -166,13 +195,74 @@
         }
     }
 
-    // Where the current sync midnight sits on the anchor day (HH:MM:SS after
-    // the 1973 anchor midnight). Fixed for a whole sync; each sync moves it
-    // back by that sync's drift (~10 s), completing one lap in ~93 years.
-    function midnightClockText(drift) {
-        const total = positiveModulo(Math.round(drift), DAY_SECONDS)
-        const pad = (n) => (n < 10 ? '0' : '') + n
-        return pad(Math.floor(total / 3600)) + ':' + pad(Math.floor(total / 60) % 60) + ':' + pad(total % 60)
+    // Next quarter boundary (peak, node, valley or end) of the current cycle
+    // at `level`, as a TT timestamp.
+    function nextThreshold(position, level) {
+        const units = prefix(level) * 4
+        const bins = position.ordinal * units + Math.floor(position.fraction * units)
+        const index = positiveModulo(bins, BINS_PER_CYCLE)
+        const quarter = Math.floor(index / 4)
+        const boundary = bins - index + 4 * (quarter + 1)
+        return { name: THRESHOLD_NAMES[quarter], tt: timestampAtRational(boundary, units) }
+    }
+
+    function periodName(depth) {
+        const cycle = Math.floor((depth - 1) / GREEK.length)
+        return { letter: (depth - 1) % GREEK.length, suffix: cycle > 0 ? String(cycle) : '' }
+    }
+
+    // UTC offset of the watch's wall clock: its local date/time fields minus
+    // UTC, rounded to 15 min. If the fields are implausible (more than 14 h
+    // away, e.g. a simulator's frozen clock), use `fallbackSeconds`.
+    function utcOffsetSeconds(utcMilliseconds, local, fallbackSeconds) {
+        if (local && local.year > 0) {
+            const wall = Date.UTC(local.year, local.month - 1, local.day,
+                local.hour, local.minute, local.second) / 1000
+            const offset = Math.round((wall - utcMilliseconds / 1000) / 900) * 900
+            if (Math.abs(offset) <= 14 * 3600) {
+                return offset
+            }
+        }
+        return fallbackSeconds
+    }
+
+    const pad2 = (n) => (n < 10 ? '0' : '') + n
+
+    function wallClock(utcSeconds, offsetSeconds) {
+        const local = Math.round(utcSeconds + offsetSeconds)
+        const days = Math.floor(local / DAY_SECONDS)
+        const seconds = local - days * DAY_SECONDS
+        // Civil date from days since 1970-01-01 (proleptic Gregorian).
+        const z = days + 719468
+        const era = Math.floor(z / 146097)
+        const doe = z - era * 146097
+        const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365)
+        const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100))
+        const mp = Math.floor((5 * doy + 2) / 153)
+        const month = mp < 10 ? mp + 3 : mp - 9
+        return {
+            days: days,
+            year: yoe + era * 400 + (month <= 2 ? 1 : 0),
+            month: month,
+            day: doy - Math.floor((153 * mp + 2) / 5) + 1,
+            time: pad2(Math.floor(seconds / 3600)) + ':' + pad2(Math.floor(seconds / 60) % 60) + ':' + pad2(seconds % 60)
+        }
+    }
+
+    // Local wall-clock time of the current sync point. The anchor is the
+    // 1973-12-24 eclipse itself, so one lap is a return to its time of day.
+    function syncClockText(syncStartTT, offsetSeconds) {
+        return wallClock(syncStartTT - TT_MINUS_UTC_SECONDS, offsetSeconds).time
+    }
+
+    // "Peak 14:32:05" on today's date, otherwise "Peak Oct 10 14:32".
+    function thresholdText(threshold, nowUtcSeconds, offsetSeconds) {
+        const at = wallClock(threshold.tt - TT_MINUS_UTC_SECONDS, offsetSeconds)
+        const today = wallClock(nowUtcSeconds, offsetSeconds)
+        if (at.days === today.days) {
+            return threshold.name + ' ' + at.time
+        }
+        return threshold.name + ' ' + MONTHS[at.month - 1] + ' ' + at.day + ' ' + at.time.slice(0, 5)
     }
 
     function clampTopDepth(depth) {
@@ -200,6 +290,15 @@
         return centers
     }
 
+    function solarDotCenters(cx, cy) {
+        return SOLAR_DOT_OFFSETS.map((o) => ({ x: cx + o.x, y: cy + o.y }))
+    }
+
+    function letterSlotCenters(screenWidth) {
+        const left = Math.round((screenWidth / 2 - GLYPH_HALF_REACH) / 2)
+        return [left, screenWidth - left]
+    }
+
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             SEQUENCE,
@@ -218,10 +317,18 @@
             timestampAtRational,
             phaseAt,
             solarAt,
-            midnightClockText,
+            GREEK,
+            nextThreshold,
+            periodName,
+            utcOffsetSeconds,
+            wallClock,
+            syncClockText,
+            thresholdText,
             clampTopDepth,
             tickMilliseconds,
             ringDotCenters,
+            solarDotCenters,
+            letterSlotCenters,
             layout: { GLYPH_STEM_X, GLYPH_CENTER_Y, DOT_SIZE, RING_RADIUS, RING_SPACING }
         }
     }
@@ -237,8 +344,13 @@
     let screenHeight = 0
     let rings = []
     let solarRing = null
-    let midnightLabel = null
-    let midnightHideAt = 0
+    let syncLabel = null
+    let thresholdLabel = null
+    let infoHideAt = 0
+    let letterSlots = []
+    let lettersPersistent = false
+    let lettersHideAt = 0
+    let lastMiddleTapAt = 0
 
     function asset(name) {
         return 'fx/' + name + '.png'
@@ -279,7 +391,9 @@
         if (ring.siblings === siblings) {
             return
         }
-        const centers = ringDotCenters(ring.cx, ring.cy, siblings)
+        const centers = ring.color === 'yellow'
+            ? solarDotCenters(ring.cx, ring.cy)
+            : ringDotCenters(ring.cx, ring.cy, siblings)
         for (let k = 0; k < ring.dots.length; k++) {
             const visible = k < centers.length
             if (visible) {
@@ -326,23 +440,118 @@
         }
         const solar = solarAt(tt)
         drawRing(solarRing, solar.index, solar.day)
-        if (midnightHideAt && time.utc >= midnightHideAt) {
-            midnightLabel.setProperty(hmUI.prop.VISIBLE, false)
-            midnightHideAt = 0
+        if (infoHideAt) {
+            if (time.utc >= infoHideAt) {
+                setInfoVisible(false)
+                infoHideAt = 0
+            } else {
+                drawInfo(tt, position, solar)
+            }
+        }
+        if (lettersHideAt && time.utc >= lettersHideAt) {
+            lettersHideAt = 0
+            setLettersVisible(lettersPersistent)
         }
     }
 
-    function showMidnight() {
+    function localOffsetSeconds() {
+        let fallback = 0
+        try {
+            const minutes = new Date(time.utc).getTimezoneOffset()
+            fallback = isFinite(minutes) ? -minutes * 60 : 0
+        } catch (e) {
+            fallback = 0
+        }
+        return utcOffsetSeconds(time.utc, time, fallback)
+    }
+
+    function drawInfo(tt, position, solar) {
+        const offset = localOffsetSeconds()
+        syncLabel.setProperty(hmUI.prop.TEXT, syncClockText(solar.syncStart, offset))
+        const threshold = nextThreshold(position, topDepth - 1)
+        thresholdLabel.setProperty(hmUI.prop.TEXT, thresholdText(threshold, time.utc / 1000, offset))
+    }
+
+    function setInfoVisible(visible) {
+        syncLabel.setProperty(hmUI.prop.VISIBLE, visible)
+        thresholdLabel.setProperty(hmUI.prop.VISIBLE, visible)
+    }
+
+    function showInfo() {
+        const tt = ttFromUtcMilliseconds(time.utc)
+        const position = positionAt(tt)
+        if (position === null) {
+            return
+        }
+        drawInfo(tt, position, solarAt(tt))
+        setInfoVisible(true)
+        infoHideAt = time.utc + INFO_MILLISECONDS
+    }
+
+    // Single tap: sync time and next threshold for a few seconds.
+    // Double tap: also toggles persistent period letters.
+    function onMiddleTap() {
         if (!time || !time.utc) {
             return
         }
-        const solar = solarAt(ttFromUtcMilliseconds(time.utc))
-        if (solar === null) {
+        const now = time.utc
+        if (lastMiddleTapAt && now - lastMiddleTapAt < DOUBLE_TAP_MILLISECONDS) {
+            lastMiddleTapAt = 0
+            lettersPersistent = !lettersPersistent
+            hmFS.SysProSetInt(LETTERS_STORAGE_KEY, lettersPersistent ? LETTERS_STORED_ON : LETTERS_STORED_OFF)
+            lettersHideAt = 0
+            setLettersVisible(lettersPersistent)
             return
         }
-        midnightLabel.setProperty(hmUI.prop.TEXT, midnightClockText(solar.drift))
-        midnightLabel.setProperty(hmUI.prop.VISIBLE, true)
-        midnightHideAt = time.utc + MIDNIGHT_LABEL_MILLISECONDS
+        lastMiddleTapAt = now
+        showInfo()
+    }
+
+    function createLetterSlot(centerX, centerY) {
+        const widget = (w, h, src) => hmUI.createWidget(hmUI.widget.IMG, { x: centerX, y: centerY, w: w, h: h, src: src })
+        return {
+            centerX: centerX,
+            centerY: centerY,
+            letter: widget(LETTER_W, LETTER_H, asset('greek_0')),
+            subs: [widget(SUB_W, SUB_H, asset('sub_0')), widget(SUB_W, SUB_H, asset('sub_0'))],
+            suffix: ''
+        }
+    }
+
+    function layoutLetterSlot(slot, depth) {
+        const name = periodName(depth)
+        const width = LETTER_W + name.suffix.length * SUB_W
+        const left = slot.centerX - Math.floor(width / 2)
+        const top = slot.centerY - (LETTER_H >> 1)
+        slot.letter.setProperty(hmUI.prop.MORE, { x: left, y: top, w: LETTER_W, h: LETTER_H, src: asset('greek_' + name.letter) })
+        for (let i = 0; i < slot.subs.length; i++) {
+            if (i < name.suffix.length) {
+                slot.subs[i].setProperty(hmUI.prop.MORE, {
+                    x: left + LETTER_W + i * SUB_W,
+                    y: top + LETTER_H - SUB_H,
+                    w: SUB_W,
+                    h: SUB_H,
+                    src: asset('sub_' + name.suffix.charAt(i))
+                })
+            }
+        }
+        slot.suffix = name.suffix
+    }
+
+    function setLettersVisible(visible) {
+        for (let i = 0; i < letterSlots.length; i++) {
+            const slot = letterSlots[i]
+            slot.letter.setProperty(hmUI.prop.VISIBLE, visible)
+            for (let k = 0; k < slot.subs.length; k++) {
+                slot.subs[k].setProperty(hmUI.prop.VISIBLE, visible && k < slot.suffix.length)
+            }
+        }
+    }
+
+    // Left: the top (longer) period; right: the bottom (shorter) one.
+    function updateLetters() {
+        layoutLetterSlot(letterSlots[0], topDepth)
+        layoutLetterSlot(letterSlots[1], topDepth + 1)
     }
 
     function restartTickTimer() {
@@ -359,6 +568,9 @@
         }
         topDepth = next
         hmFS.SysProSetInt(DEPTH_STORAGE_KEY, topDepth)
+        updateLetters()
+        setLettersVisible(true)
+        lettersHideAt = lettersPersistent ? 0 : time.utc + LETTER_MILLISECONDS
         tick()
         restartTickTimer()
     }
@@ -383,6 +595,7 @@
         time = hmSensor.createSensor(hmSensor.id.TIME)
         const storedDepth = hmFS.SysProGetInt(DEPTH_STORAGE_KEY)
         topDepth = storedDepth ? clampTopDepth(storedDepth) : DEFAULT_TOP_DEPTH
+        lettersPersistent = hmFS.SysProGetInt(LETTERS_STORAGE_KEY) === LETTERS_STORED_ON
 
         const centerY = Math.floor(screenHeight / 2)
         rings = [
@@ -392,26 +605,36 @@
         solarRing = createRing(centerY, 'yellow', SOLAR_DAYS_PER_SYNC - 1)
         layoutRing(solarRing, SOLAR_DAYS_PER_SYNC)
 
-        // Phase of the current sync midnight on the anchor day, shown briefly
-        // after a tap on the solar glyph.
-        midnightLabel = hmUI.createWidget(hmUI.widget.TEXT, {
+        const label = (y, color) => hmUI.createWidget(hmUI.widget.TEXT, {
             x: 0,
-            y: centerY + RING_RADIUS + (DOT_SIZE >> 1) + 6,
+            y: y,
             w: screenWidth,
-            h: MIDNIGHT_LABEL_HEIGHT,
-            color: MIDNIGHT_COLOR,
+            h: LABEL_HEIGHT,
+            color: color,
             text_size: 16,
             align_h: hmUI.align.CENTER_H,
             align_v: hmUI.align.CENTER_V,
             text_style: hmUI.text_style.NONE,
             text: ''
         })
-        midnightLabel.setProperty(hmUI.prop.VISIBLE, false)
+        // On tap: the top glyph's next threshold above the solar glyph and
+        // the local time of the current sync point below it.
+        thresholdLabel = label(centerY - INFO_LABEL_OFFSET - LABEL_HEIGHT, THRESHOLD_COLOR)
+        syncLabel = label(centerY + SYNC_LABEL_OFFSET, SYNC_COLOR)
+        setInfoVisible(false)
+
+        letterSlots = [
+            // Same row as the solar side dots.
+            createLetterSlot(letterSlotCenters(screenWidth)[0], centerY + SOLAR_DOT_OFFSETS[0].y),
+            createLetterSlot(letterSlotCenters(screenWidth)[1], centerY + SOLAR_DOT_OFFSETS[0].y)
+        ]
+        updateLetters()
+        setLettersVisible(lettersPersistent)
 
         const zoneHeight = Math.floor(screenHeight * TOUCH_ZONE_FRACTION)
         createTapZone(0, zoneHeight, () => setTopDepth(topDepth - 1))
         createTapZone(screenHeight - zoneHeight, zoneHeight, () => setTopDepth(topDepth + 1))
-        createTapZone(zoneHeight, screenHeight - 2 * zoneHeight, showMidnight)
+        createTapZone(zoneHeight, screenHeight - 2 * zoneHeight, onMiddleTap)
 
         tick()
         restartTickTimer()
