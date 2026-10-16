@@ -15,29 +15,27 @@
     const THRESHOLD_NAMES = ['Peak', 'Node', 'Valley', 'End']
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
-    // Solar Saros 141 greatest eclipses, TT seconds since 1970-01-01 TT
-    // (fractonica.js DEFAULT_ECLIPSES). Index = recurrence ordinal.
-    const ECLIPSES_TT = [
-        -11253795384, -10684827263, -10115859443, -9546891833, -8977924433,
-        -8408957006, -7839989585, -7271021944, -6702054195, -6133086020,
-        -5564117556, -4995148575, -4426179187, -3857209177, -3288238726,
-        -2719267746, -2150296299, -1581324348, -1012352055, -443379455,
-        125593364, 694566337, 1263539259, 1832512139, 2401484786,
-        2970457223, 3539429220, 4108400891, 4677372055, 5246342779,
-        5815312981, 6384282795, 6953252190, 7522221186, 8091189911,
-        8660158392, 9229126755, 9798095001, 10367063342, 10936031778,
-        11505000393, 12073969295, 12642938541, 13211908225, 13780878323,
-        14349848986, 14918820180, 15487791957, 16056764302, 16625737223,
-        17194710682, 17763684566, 18332658941, 18901633621, 19470608606,
-        20039583666, 20608558884, 21177534004, 21746509035, 22315483795,
-        22884458336, 23453432492, 24022406294, 24591379667, 25160352680,
-        25729325224, 26298297440, 26867269261, 27436240877, 28005212105
+    // Solar Saros 141 greatest eclipses as Unix seconds (UTC), precomputed
+    // from NASA's TT values by fractonica.js (F.defaults.unixTimestamps):
+    // leap-second table 1972-2027, Delta-T estimate before 1972, TAI - UTC
+    // held at 37 s after 2027. The clock runs on device Unix time directly:
+    // no TT or leap-second logic. Index = recurrence ordinal.
+    const ECLIPSES = [
+        -11253795486.968, -10684827340.124, -10115859492.780, -9546891859.112, -8977924443.862,
+        -8408957014.511, -7839989594.977, -7271021955.471, -6702054209.003, -6133086036.449,
+        -5564117571.512, -4995148587.324, -4426179194.600, -3857209183.600, -3288238731.185,
+        -2719267740.393, -2150296298.803, -1581324369.140, -1012352078.953, -443379486.426,
+        125593319.816, 694566278.816, 1263539192.816, 1832512069.816, 2401484716.816,
+        2970457153.816, 3539429150.816, 4108400821.816, 4677371985.816, 5246342709.816,
+        5815312911.816, 6384282725.816, 6953252120.816, 7522221116.816, 8091189841.816,
+        8660158322.816, 9229126685.816, 9798094931.816, 10367063272.816, 10936031708.816,
+        11505000323.816, 12073969225.816, 12642938471.816, 13211908155.816, 13780878253.816,
+        14349848916.816, 14918820110.816, 15487791887.816, 16056764232.816, 16625737153.816,
+        17194710612.816, 17763684496.816, 18332658871.816, 18901633551.816, 19470608536.816,
+        20039583596.816, 20608558814.816, 21177533934.816, 21746508965.816, 22315483725.816,
+        22884458266.816, 23453432422.816, 24022406224.816, 24591379597.816, 25160352610.816,
+        25729325154.816, 26298297370.816, 26867269191.816, 27436240807.816, 28005212035.816
     ]
-
-    // TT - UTC = (TAI - UTC) + 32.184 s. TAI - UTC has been 37 s since
-    // 2017-01-01; update if a new leap second is announced.
-    const TT_MINUS_UTC_SECONDS = 37 + 32.184
-
 
     // Solar reference. 19 depth-7 cycles (~5.05 h each) are almost exactly
     // four days. The first eclipse of Alpha 6 (ordinal 20, 1973-12-24) is
@@ -65,6 +63,13 @@
     const MAX_TOP_DEPTH = 11
     const DEFAULT_TOP_DEPTH = 7
     const DEPTH_STORAGE_KEY = 'fractonica_top_depth'
+    // The journal face is the default; a triple tap in the middle switches to the watch face
+    // above (period odometers + solar sync) and back. Both choices are remembered.
+    const FACE_STORAGE_KEY = 'fractonica_face'
+    const FACE_STORED_JOURNAL = 1
+    const FACE_STORED_WATCH = 2
+    const UNIT_STORAGE_KEY = 'fractonica_journal_unit'
+    const TRIPLE_TAP_TAPS = 3
 
     // Glyph images: 10 px per CBT unit; the stem (x = 0) is on the pixel
     // column centre GLYPH_STEM_X, and the drawing's vertical centre on row
@@ -118,8 +123,8 @@
         return SEQUENCE[(level - 1) % SEQUENCE.length]
     }
 
-    function ttFromUtcMilliseconds(utcMilliseconds) {
-        return utcMilliseconds / 1000 + TT_MINUS_UTC_SECONDS
+    function unixFromMilliseconds(utcMilliseconds) {
+        return utcMilliseconds / 1000
     }
 
     function positiveModulo(value, modulus) {
@@ -129,16 +134,16 @@
 
     // Position split into whole ordinal and fraction to keep precision when
     // multiplied by large prefixes.
-    function positionAt(tt) {
-        const last = ECLIPSES_TT.length - 1
-        if (tt < ECLIPSES_TT[0] || tt > ECLIPSES_TT[last]) {
+    function positionAt(t) {
+        const last = ECLIPSES.length - 1
+        if (t < ECLIPSES[0] || t > ECLIPSES[last]) {
             return null
         }
         let lo = 0
         let hi = last
         while (lo + 1 < hi) {
             const mid = (lo + hi) >> 1
-            if (ECLIPSES_TT[mid] <= tt) {
+            if (ECLIPSES[mid] <= t) {
                 lo = mid
             } else {
                 hi = mid
@@ -146,15 +151,15 @@
         }
         return {
             ordinal: lo,
-            fraction: (tt - ECLIPSES_TT[lo]) / (ECLIPSES_TT[lo + 1] - ECLIPSES_TT[lo])
+            fraction: (t - ECLIPSES[lo]) / (ECLIPSES[lo + 1] - ECLIPSES[lo])
         }
     }
 
     // Inverse of positionAt for a position given as numerator / denominator.
     function timestampAtRational(numerator, denominator) {
-        const ordinal = Math.min(Math.floor(numerator / denominator), ECLIPSES_TT.length - 2)
+        const ordinal = Math.min(Math.floor(numerator / denominator), ECLIPSES.length - 2)
         const fraction = (numerator - ordinal * denominator) / denominator
-        return ECLIPSES_TT[ordinal] + fraction * (ECLIPSES_TT[ordinal + 1] - ECLIPSES_TT[ordinal])
+        return ECLIPSES[ordinal] + fraction * (ECLIPSES[ordinal + 1] - ECLIPSES[ordinal])
     }
 
     function wholeBins(position, level) {
@@ -201,8 +206,8 @@
         return { value: index - 4 * m, dotted: false }
     }
 
-    function solarAt(tt) {
-        const position = positionAt(tt)
+    function solarAt(t) {
+        const position = positionAt(t)
         if (position === null) {
             return null
         }
@@ -215,9 +220,9 @@
         // Sync boundary position = (anchorCycle + 19 * sync) * 4 / P(6).
         const syncStart = timestampAtRational((anchorCycle + SOLAR_CYCLES_PER_SYNC * sync) * 4, p)
         const syncEnd = timestampAtRational((anchorCycle + SOLAR_CYCLES_PER_SYNC * (sync + 1)) * 4, p)
-        const nominalStart = ECLIPSES_TT[SOLAR_ANCHOR_ORDINAL]
+        const nominalStart = ECLIPSES[SOLAR_ANCHOR_ORDINAL]
             + sync * SOLAR_DAYS_PER_SYNC * DAY_SECONDS
-        const phase = (tt - syncStart) / (syncEnd - syncStart)
+        const phase = (t - syncStart) / (syncEnd - syncStart)
         const steps = Math.pow(SOLAR_STATES, SOLAR_DIGITS)
         let step = Math.min(Math.max(Math.floor(phase * steps), 0), steps - 1)
         const digits = []
@@ -241,19 +246,19 @@
         const quarter = Math.min(Math.floor(solar.phase * 4), 3)
         return {
             name: THRESHOLD_NAMES[quarter],
-            tt: solar.syncStart + (quarter + 1) / 4 * (solar.syncEnd - solar.syncStart)
+            time: solar.syncStart + (quarter + 1) / 4 * (solar.syncEnd - solar.syncStart)
         }
     }
 
     // Next quarter boundary (peak, node, valley or end) of the current cycle
-    // at `level`, as a TT timestamp.
+    // at `level`, as a Unix timestamp.
     function nextThreshold(position, level) {
         const units = prefix(level) * 4
         const bins = position.ordinal * units + Math.floor(position.fraction * units)
         const index = positiveModulo(bins, BINS_PER_CYCLE)
         const quarter = Math.floor(index / 4)
         const boundary = bins - index + 4 * (quarter + 1)
-        return { name: THRESHOLD_NAMES[quarter], tt: timestampAtRational(boundary, units) }
+        return { name: THRESHOLD_NAMES[quarter], time: timestampAtRational(boundary, units) }
     }
 
     function periodName(depth) {
@@ -301,13 +306,13 @@
 
     // Local wall-clock time of the current sync point. The anchor is the
     // 1973-12-24 eclipse itself, so one lap is a return to its time of day.
-    function syncClockText(syncStartTT, offsetSeconds) {
-        return wallClock(syncStartTT - TT_MINUS_UTC_SECONDS, offsetSeconds).time
+    function syncClockText(syncStart, offsetSeconds) {
+        return wallClock(syncStart, offsetSeconds).time
     }
 
     // "Peak 14:32:05" on today's date, otherwise "Peak Oct 10 14:32".
     function thresholdText(threshold, nowUtcSeconds, offsetSeconds) {
-        const at = wallClock(threshold.tt - TT_MINUS_UTC_SECONDS, offsetSeconds)
+        const at = wallClock(threshold.time, offsetSeconds)
         const today = wallClock(nowUtcSeconds, offsetSeconds)
         if (at.days === today.days) {
             return threshold.name + ' ' + at.time
@@ -321,7 +326,7 @@
 
     // Refresh several times per sub glyph state of the finer displayed level.
     function tickMilliseconds(level) {
-        const sarosSeconds = ECLIPSES_TT[23] - ECLIPSES_TT[22]
+        const sarosSeconds = ECLIPSES[23] - ECLIPSES[22]
         const binMilliseconds = 4 * sarosSeconds * 1000 / prefix(level) / BINS_PER_CYCLE / BINS_PER_CYCLE
         return Math.min(Math.max(Math.floor(binMilliseconds / 8), MIN_TICK_MILLISECONDS), MAX_TICK_MILLISECONDS)
     }
@@ -377,11 +382,112 @@
         }
     }
 
+    // ---- the journal face (as the fractonica-clock browser face, src/ui/face/journal.js) ----
+    // Units long to short: alpha beta gamma delta (major) epsilon eta iota lambda nu (minor);
+    // `unit` is the index of the first one shown (0..6; the last triplet is iota lambda nu).
+    // A major period is shown alone: its phase as a big 3-stroke glyph, four lines of words
+    // (the ordinal of its current child, its name, its fracton word, its quarter) and its
+    // cycle. Minor units show in threes, every count in two digits ("34η 29ι 21λ"), with the
+    // lead unit's phase as a 2-stroke pair (256 states) above and its cycle below.
+    const JOURNAL_UNITS = [0, 1, 2, 3, 4, 6, 8, 10, 12]
+    const JOURNAL_MAX_UNIT = 6
+    const JOURNAL_DEFAULT_UNIT = 5
+    const JOURNAL_LETTERS = { 0: 'α', 1: 'β', 2: 'γ', 3: 'δ', 4: 'ε', 6: 'η', 8: 'ι', 10: 'λ', 12: 'ν' }
+    const MAJOR_NAMES = ['Alpha', 'Beta', 'Gamma', 'Delta']
+    const FRACTON_NAMES = ['', 'Monofracton', 'Difracton', 'Trifracton', 'Tetrafracton', 'Pentafracton',
+        'Hexafracton', 'Heptafracton', 'Octafracton', 'Nonafracton', 'Decafracton', 'Didecafracton',
+        'Dodecafracton', 'Tridecafracton', 'Tetradecafracton', 'Pentadecafracton', 'Hexadecafracton',
+        'Heptadecafracton', 'Octadecafracton', 'Nonadecafracton', 'Icosafracton']
+
+    function clampJournalUnit(unit) {
+        return Math.min(Math.max(Math.round(unit), 0), JOURNAL_MAX_UNIT)
+    }
+
+    // "1st", "2nd", "3rd", "4th", "11th", "22nd"
+    function ordinalText(n) {
+        const v = n % 100
+        const suffix = v >= 11 && v <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' })[n % 10] || 'th'
+        return n + suffix
+    }
+
+    // Fraction of the current level cycle elapsed: (position * P / 4) mod 1.
+    function cyclePhase(position, level) {
+        const p = prefix(level)
+        return positiveModulo(position.ordinal * p / 4 + position.fraction * p / 4, 1)
+    }
+
+    // SPEC 4.1 state of a 3-stroke glyph (m = 13, 52 states): floor(position * P * 13) mod 52.
+    function index3At(position, level) {
+        const units = prefix(level) * 13
+        return positiveModulo(position.ordinal * units + Math.floor(position.fraction * units), 52)
+    }
+
+    function journalAt(position, unit) {
+        const u = clampJournalUnit(unit)
+        const first = JOURNAL_UNITS[u]
+        const local = (level) => phaseAt(position, level).local
+        const reading = {
+            unit: u,
+            level: first,
+            letter: JOURNAL_LETTERS[first],
+            phase: cyclePhase(position, first),
+            major: first <= 3,
+            lines: null,
+            index3: 0,
+            tokens: null,
+            pair: null
+        }
+        if (reading.major) {
+            const child = { 0: local(1), 1: local(2), 2: local(3), 3: local(4) }[first] + 1
+            const own = first === 0 ? phaseAt(position, 0).cycle + 1 : local(first) + 1
+            const quarter = THRESHOLD_NAMES[Math.min(3, Math.floor(reading.phase * 4))]
+            reading.lines = [ordinalText(child), MAJOR_NAMES[first], FRACTON_NAMES[own] || '', quarter]
+            reading.index3 = index3At(position, first)
+            return reading
+        }
+        // counts as SPEC 15.3: the Nuclide ordinal, Helions 1..77, Preons, Flavons, Blinks from 0
+        const count = {
+            4: local(4) + 1,
+            6: 11 * local(5) + local(6) + 1,
+            8: 4 * local(7) + local(8),
+            10: 13 * local(9) + local(10),
+            12: 5 * local(11) + local(12)
+        }
+        reading.tokens = JOURNAL_UNITS.slice(u, u + 3).map((level) => ({
+            level: level,
+            text: level === 4 ? 'ε#' + pad2(count[4]) : pad2(count[level]) + JOURNAL_LETTERS[level]
+        }))
+        // the lead unit's phase as a pair: the 16-state glyph and the 16-state glyph inside it
+        reading.pair = { hi: phaseAt(position, first).index, lo: subPhaseAt(position, first).sub }
+        return reading
+    }
+
+    // The point at cycle fraction f on the two half-arcs of the journal's cycle drawing: the
+    // left one below the axis (descending), the right one above (ascending); centre cx, cy,
+    // radius r of each half.
+    function journalArcPoint(f, cx, cy, r) {
+        const p = Math.min(Math.max(f, 0), 1)
+        if (p <= 0.5) {
+            const a = Math.PI * 2 * p
+            return { x: cx - r - r * Math.cos(a), y: cy + r * Math.sin(a) }
+        }
+        const a = Math.PI * (2 * p - 1)
+        return { x: cx + r - r * Math.cos(a), y: cy - r * Math.sin(a) }
+    }
+
+    // Refresh often enough for the finest unit on screen.
+    function journalTickMilliseconds(unit) {
+        const u = clampJournalUnit(unit)
+        const finest = u <= 3 ? JOURNAL_UNITS[u] : JOURNAL_UNITS[Math.min(u + 2, JOURNAL_UNITS.length - 1)]
+        const sarosSeconds = ECLIPSES[23] - ECLIPSES[22]
+        const cycleMilliseconds = 4 * sarosSeconds * 1000 / prefix(finest)
+        return Math.min(Math.max(Math.floor(cycleMilliseconds / 4), MIN_TICK_MILLISECONDS), MAX_TICK_MILLISECONDS)
+    }
+
     if (typeof module !== 'undefined' && module.exports) {
         module.exports = {
             SEQUENCE,
-            ECLIPSES_TT,
-            TT_MINUS_UTC_SECONDS,
+            ECLIPSES,
             SOLAR_LEVEL,
             SOLAR_ANCHOR_ORDINAL,
             SOLAR_CYCLES_PER_SYNC,
@@ -396,7 +502,7 @@
             DOT_SIZE,
             prefix,
             siblingCount,
-            ttFromUtcMilliseconds,
+            unixFromMilliseconds,
             positionAt,
             timestampAtRational,
             phaseAt,
@@ -413,7 +519,19 @@
             clampTopDepth,
             tickMilliseconds,
             arcDotCenters,
-            layoutFor
+            layoutFor,
+            JOURNAL_UNITS,
+            JOURNAL_MAX_UNIT,
+            JOURNAL_DEFAULT_UNIT,
+            JOURNAL_LETTERS,
+            FRACTON_NAMES,
+            clampJournalUnit,
+            ordinalText,
+            cyclePhase,
+            index3At,
+            journalAt,
+            journalArcPoint,
+            journalTickMilliseconds
         }
     }
 
@@ -437,6 +555,12 @@
     let lettersPersistent = false
     let lettersHideAt = 0
     let lastMiddleTapAt = 0
+    let middleTaps = 0
+    let lettersBeforeDouble = false
+    let journalMode = true
+    let journalUnit = JOURNAL_DEFAULT_UNIT
+    let journal = null
+    let watchWidgets = []
 
     function asset(name) {
         return 'fx/' + name + '.png'
@@ -501,9 +625,13 @@
         if (!time || !time.utc) {
             return
         }
-        const tt = ttFromUtcMilliseconds(time.utc)
-        const position = positionAt(tt)
+        const t = unixFromMilliseconds(time.utc)
+        const position = positionAt(t)
         if (position === null) {
+            return
+        }
+        if (journalMode) {
+            drawJournal(position)
             return
         }
         for (let i = 0; i < periods.length; i++) {
@@ -512,7 +640,7 @@
             layoutPeriod(periods[i], phase.siblings)
             drawPeriod(periods[i], phase, subPhaseAt(position, level))
         }
-        const solar = solarAt(tt)
+        const solar = solarAt(t)
         for (let i = 0; i < solarGlyphs.length; i++) {
             setSource(solarGlyphs[i], asset('sun_' + solar.digits[i]))
         }
@@ -556,12 +684,12 @@
     }
 
     function showInfo() {
-        const tt = ttFromUtcMilliseconds(time.utc)
-        const position = positionAt(tt)
+        const t = unixFromMilliseconds(time.utc)
+        const position = positionAt(t)
         if (position === null) {
             return
         }
-        drawInfo(position, solarAt(tt))
+        drawInfo(position, solarAt(t))
         infoHideAt = time.utc + INFO_MILLISECONDS
         setInfoVisible(true)
         refreshLetters()
@@ -573,23 +701,41 @@
         refreshLetters()
     }
 
-    // Single tap: thresholds and sync time for a few seconds.
-    // Double tap: toggles persistent period letters.
+    // Watch face: a single tap shows thresholds and sync time for a few seconds, a double tap
+    // toggles persistent period letters. Both faces: a triple tap switches the face (the
+    // watch face's double tap is undone first).
     function onMiddleTap() {
         if (!time || !time.utc) {
             return
         }
         const now = time.utc
-        if (lastMiddleTapAt && now - lastMiddleTapAt < DOUBLE_TAP_MILLISECONDS) {
+        middleTaps = lastMiddleTapAt && now - lastMiddleTapAt < DOUBLE_TAP_MILLISECONDS ? middleTaps + 1 : 1
+        lastMiddleTapAt = now
+        if (middleTaps >= TRIPLE_TAP_TAPS) {
+            middleTaps = 0
             lastMiddleTapAt = 0
-            lettersPersistent = !lettersPersistent
-            hmFS.SysProSetInt(LETTERS_STORAGE_KEY, lettersPersistent ? LETTERS_STORED_ON : LETTERS_STORED_OFF)
-            lettersHideAt = 0
-            hideInfo()
+            if (!journalMode && lettersPersistent !== lettersBeforeDouble) {
+                setLettersPersistent(lettersBeforeDouble)
+            }
+            setJournalMode(!journalMode)
             return
         }
-        lastMiddleTapAt = now
+        if (journalMode) {
+            return
+        }
+        if (middleTaps === 2) {
+            lettersBeforeDouble = lettersPersistent
+            setLettersPersistent(!lettersPersistent)
+            return
+        }
         showInfo()
+    }
+
+    function setLettersPersistent(on) {
+        lettersPersistent = on
+        hmFS.SysProSetInt(LETTERS_STORAGE_KEY, lettersPersistent ? LETTERS_STORED_ON : LETTERS_STORED_OFF)
+        lettersHideAt = 0
+        hideInfo()
     }
 
     function createLetterSlot(center) {
@@ -643,11 +789,185 @@
         layoutLetterSlot(letterSlots[1], topDepth + 1)
     }
 
+    // ---- journal face widgets ----
+    const J_TOP_Y = 92
+    const J_TOP_LETTER_Y = 148
+    const J_CHARS = 12
+    const J_CHAR_W = 14
+    const J_CHAR_H = 28
+    const J_ARC_W = 160
+    const J_ARC_H = 86
+    const J_ARC_R = 38
+    const J_DOT = 11
+    const J_LINE_COLOR = 0xC9D3DC
+    const J_COLORS = { 0: 0x9F65E2, 1: 0x7A65E2, 2: 0x6578E2, 3: 0x659DE2 }
+
+    function holder(widget) {
+        return { widget: widget, source: '' }
+    }
+
+    function createJournal() {
+        const cx = layout.cx
+        const arcY = screenHeight - 98
+        const j = {
+            cx: cx,
+            cy: layout.cy,
+            arcY: arcY,
+            pair: [0, 1].map((i) => holder(image(cx + (i ? 6 : -6 - GLYPH_W), J_TOP_Y - GLYPH2_CENTER_Y, GLYPH_W, GLYPH2_H, asset('blank')))),
+            big: holder(image(cx - GLYPH_STEM_X, J_TOP_Y - GLYPH3_CENTER_Y, GLYPH_W, GLYPH3_H, asset('blank'))),
+            topLetter: holder(image(cx - 10, J_TOP_LETTER_Y - 14, 20, 28, asset('blank'))),
+            chars: [],
+            lines: [],
+            lineTexts: ['', '', '', ''],
+            arc: holder(image(cx - (J_ARC_W >> 1), arcY - (J_ARC_H >> 1), J_ARC_W, J_ARC_H, asset('blank'))),
+            dot: image(cx, arcY, J_DOT, J_DOT, asset('jdot')),
+            bottomLetter: holder(image(cx - 10, screenHeight - 30 - 14, 20, 28, asset('blank'))),
+            key: ''
+        }
+        const left = cx - Math.round(J_CHARS * J_CHAR_W / 2)
+        for (let i = 0; i < J_CHARS; i++) {
+            j.chars.push(holder(image(left + i * J_CHAR_W, layout.cy - (J_CHAR_H >> 1), J_CHAR_W, J_CHAR_H, asset('blank'))))
+        }
+        // four lines of a major period: the child's ordinal, the name, the fracton word, the quarter
+        const sizes = [20, 26, 22, 20]
+        const lead = 32
+        for (let i = 0; i < 4; i++) {
+            j.lines.push(hmUI.createWidget(hmUI.widget.TEXT, {
+                x: 0,
+                y: layout.cy - 2 * lead + i * lead,
+                w: screenWidth,
+                h: lead,
+                color: J_LINE_COLOR,
+                text_size: sizes[i],
+                align_h: hmUI.align.CENTER_H,
+                align_v: hmUI.align.CENTER_V,
+                text_style: hmUI.text_style.NONE,
+                text: ''
+            }))
+        }
+        return j
+    }
+
+    function journalWidgets(j) {
+        return [...j.pair.map((h) => h.widget), j.big.widget, j.topLetter.widget, ...j.chars.map((h) => h.widget),
+            ...j.lines, j.arc.widget, j.dot, j.bottomLetter.widget]
+    }
+
+    // The middle reading as character images, centred: digits white, unit letters coloured.
+    function drawChars(j, tokens) {
+        const text = tokens.map((x) => x.text).join(' ')
+        const chars = text.split('')
+        const offset = Math.floor((J_CHARS - chars.length) / 2)
+        let level = null
+        for (let i = 0; i < J_CHARS; i++) {
+            const ch = chars[i - offset]
+            let src = 'blank'
+            if (ch !== undefined && ch !== ' ') {
+                if (ch >= '0' && ch <= '9') {
+                    src = 'jc_d' + ch
+                } else if (ch === '#') {
+                    src = 'jc_hash'
+                } else {
+                    for (const L of JOURNAL_UNITS) {
+                        if (JOURNAL_LETTERS[L] === ch) {
+                            level = L
+                        }
+                    }
+                    src = 'jc_u' + level
+                }
+            }
+            setSource(j.chars[i], asset(src))
+        }
+    }
+
+    function drawJournal(position) {
+        const j = journal
+        const r = journalAt(position, journalUnit)
+        const show = (w, on) => w.setProperty(hmUI.prop.VISIBLE, on)
+        const mode = r.major ? 'major' : 'minor'
+        if (j.key !== mode + r.unit) {
+            j.key = mode + r.unit
+            j.pair.forEach((h) => show(h.widget, !r.major))
+            show(j.topLetter.widget, !r.major)
+            show(j.big.widget, r.major)
+            j.chars.forEach((h) => show(h.widget, !r.major))
+            j.lines.forEach((w) => show(w, r.major))
+            setSource(j.arc, asset('jarc_' + r.level))
+            setSource(j.bottomLetter, asset('jl_' + r.level))
+            setSource(j.topLetter, asset('jl_' + r.level))
+            if (r.major) {
+                j.lines[1].setProperty(hmUI.prop.COLOR, J_COLORS[r.level])
+                j.lines[2].setProperty(hmUI.prop.COLOR, J_COLORS[r.level])
+            }
+        }
+        if (r.major) {
+            setSource(j.big, asset('j3_' + r.level + '_' + r.index3))
+            for (let i = 0; i < 4; i++) {
+                if (j.lineTexts[i] !== r.lines[i]) {
+                    j.lines[i].setProperty(hmUI.prop.TEXT, r.lines[i])
+                    j.lineTexts[i] = r.lines[i]
+                }
+            }
+        } else {
+            setSource(j.pair[0], asset('j2_' + r.level + '_' + r.pair.hi))
+            setSource(j.pair[1], asset('j2_' + r.level + '_' + r.pair.lo))
+            drawChars(j, r.tokens)
+        }
+        const p = journalArcPoint(r.phase, j.cx, j.arcY, J_ARC_R)
+        const dx = Math.round(p.x) - (J_DOT >> 1)
+        const dy = Math.round(p.y) - (J_DOT >> 1)
+        if (j.dotX !== dx || j.dotY !== dy) {
+            j.dot.setProperty(hmUI.prop.MORE, { x: dx, y: dy, w: J_DOT, h: J_DOT })
+            j.dotX = dx
+            j.dotY = dy
+        }
+    }
+
+    function setJournalUnit(unit) {
+        const next = clampJournalUnit(unit)
+        if (next === journalUnit) {
+            return
+        }
+        journalUnit = next
+        hmFS.SysProSetInt(UNIT_STORAGE_KEY, journalUnit + 1)
+        tick()
+        restartTickTimer()
+    }
+
+    // Show one face: the journal's widgets or the watch face's.
+    function setJournalMode(on) {
+        journalMode = on
+        hmFS.SysProSetInt(FACE_STORAGE_KEY, on ? FACE_STORED_JOURNAL : FACE_STORED_WATCH)
+        for (const w of journalWidgets(journal)) {
+            w.setProperty(hmUI.prop.VISIBLE, on)
+        }
+        journal.key = ''
+        for (const w of watchWidgets) {
+            w.setProperty(hmUI.prop.VISIBLE, !on)
+        }
+        if (on) {
+            infoHideAt = 0
+            setInfoVisible(false)
+            for (const slot of letterSlots) {
+                slot.letter.setProperty(hmUI.prop.VISIBLE, false)
+                slot.subs.forEach((w) => w.setProperty(hmUI.prop.VISIBLE, false))
+            }
+        } else {
+            for (const period of periods) {
+                period.siblings = 0 // lay the counter dots out again
+            }
+            refreshLetters()
+        }
+        tick()
+        restartTickTimer()
+    }
+
     function restartTickTimer() {
         if (timerId) {
             timer.stopTimer(timerId)
         }
-        timerId = timer.createTimer(0, tickMilliseconds(topDepth), () => tick(), {})
+        const ms = journalMode ? journalTickMilliseconds(journalUnit) : tickMilliseconds(topDepth)
+        timerId = timer.createTimer(0, ms, () => tick(), {})
     }
 
     function setTopDepth(depth) {
@@ -690,6 +1010,9 @@
         const storedDepth = hmFS.SysProGetInt(DEPTH_STORAGE_KEY)
         topDepth = storedDepth ? clampTopDepth(storedDepth) : DEFAULT_TOP_DEPTH
         lettersPersistent = hmFS.SysProGetInt(LETTERS_STORAGE_KEY) === LETTERS_STORED_ON
+        const storedUnit = hmFS.SysProGetInt(UNIT_STORAGE_KEY)
+        journalUnit = storedUnit ? clampJournalUnit(storedUnit - 1) : JOURNAL_DEFAULT_UNIT
+        journalMode = hmFS.SysProGetInt(FACE_STORAGE_KEY) !== FACE_STORED_WATCH
 
         periods = [createPeriod(0), createPeriod(1)]
         solarGlyphs = layout.solarGlyphs.map((at) =>
@@ -718,13 +1041,19 @@
         updateLetters()
         refreshLetters()
 
+        watchWidgets = [
+            ...periods.flatMap((p) => [...p.glyphs.map((g) => g.widget), ...p.dots.map((d) => d.widget)]),
+            ...solarGlyphs.map((g) => g.widget)
+        ]
+        journal = createJournal()
+
+        // Top third: one depth (watch) or one unit (journal) longer; bottom third: shorter.
         const zoneHeight = Math.floor(screenHeight * TOUCH_ZONE_FRACTION)
-        createTapZone(0, zoneHeight, () => setTopDepth(topDepth - 1))
-        createTapZone(screenHeight - zoneHeight, zoneHeight, () => setTopDepth(topDepth + 1))
+        createTapZone(0, zoneHeight, () => (journalMode ? setJournalUnit(journalUnit - 1) : setTopDepth(topDepth - 1)))
+        createTapZone(screenHeight - zoneHeight, zoneHeight, () => (journalMode ? setJournalUnit(journalUnit + 1) : setTopDepth(topDepth + 1)))
         createTapZone(zoneHeight, screenHeight - 2 * zoneHeight, onMiddleTap)
 
-        tick()
-        restartTickTimer()
+        setJournalMode(journalMode)
     }
 
     var __$$app$$__ = __$$hmAppManager$$__.currentApp

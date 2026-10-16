@@ -1,6 +1,7 @@
 'use strict'
 
-// Cross-checks the Number port in watchface/index.js against fractonica.js.
+// Cross-checks the Number port in watchface/index.js against the exact
+// fractonica.js Unix clock.
 //   node test/model.test.cjs [path/to/fractonica.js]
 
 const assert = require('node:assert/strict')
@@ -9,14 +10,16 @@ const path = require('node:path')
 const vm = require('node:vm')
 const model = require('../watchface/index.js')
 
-const library = path.resolve(process.argv[2] || path.join(__dirname, '../../../fractonica-clock/fractonica.js'))
+const libraryDir = path.join(__dirname, '../../../fractonica-clock')
+const library = path.resolve(process.argv[2]
+    || [path.join(libraryDir, 'fractonica-2.0.0.js'), path.join(libraryDir, 'fractonica.js')].find(fs.existsSync))
 const sandbox = { module: { exports: {} }, console, BigInt, Intl, Date }
 sandbox.globalThis = sandbox
 vm.runInNewContext(fs.readFileSync(library, 'utf8'), sandbox, { filename: library })
 const F = sandbox.module.exports
-const clock = F.create()
+const clock = F.create({ timeScale: 'unix' })
 
-assert.deepEqual(model.ECLIPSES_TT, Array.from(F.defaults.timestamps, Number))
+assert.deepEqual(model.ECLIPSES, Array.from(F.defaults.unixTimestamps, Number))
 for (let level = 0; level < 14; level++) {
     assert.equal(model.prefix(level), Number(clock.prefix(level)))
     if (level > 0) {
@@ -26,9 +29,9 @@ for (let level = 0; level < 14; level++) {
 assert.equal(model.siblingCount(6), 11) // depth 7
 assert.equal(model.siblingCount(7), 9) // depth 8
 
-// UTC -> TT agrees with the library's leap-second model.
+// Device time is used as is: Unix seconds, no TT or leap-second logic.
 const utcMs = Date.parse('2026-10-08T12:00:00Z')
-assert.ok(Math.abs(model.ttFromUtcMilliseconds(utcMs) - F.number(F.fromUTC(new Date(utcMs)))) < 1e-6)
+assert.equal(model.unixFromMilliseconds(utcMs), utcMs / 1000)
 
 // Glyph bin and local index against the exact rational implementation.
 // Instants are drawn away from bin edges so float rounding cannot flip them.
@@ -36,9 +39,9 @@ let checked = 0
 let seed = 12345
 const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
 for (let i = 0; i < 400; i++) {
-    const ttSeconds = Math.round(F.number(F.fromUTC(new Date(Date.UTC(1975, 0, 1) + random() * 3.2e12))))
-    const exact = clock.positionAt(F.rational(BigInt(ttSeconds)))
-    const position = model.positionAt(ttSeconds)
+    const seconds = Math.round((Date.UTC(1975, 0, 1) + random() * 3.2e12) / 1000)
+    const exact = clock.positionAt(F.rational(BigInt(seconds)))
+    const position = model.positionAt(seconds)
     for (let level = 1; level <= 12; level++) {
         const units = clock.prefix(level) * 4n
         const scaled = exact.numerator * units
@@ -49,7 +52,7 @@ for (let i = 0; i < 400; i++) {
         const reference = clock.phaseAt(exact, level)
         const cycleIndex = (scaled / exact.denominator) / 16n
         const phase = model.phaseAt(position, level)
-        assert.equal(phase.index, Number(reference.index), `bin, level ${level}, t ${ttSeconds}`)
+        assert.equal(phase.index, Number(reference.index), `bin, level ${level}, t ${seconds}`)
         assert.equal(phase.local, Number(cycleIndex % BigInt(clock.factorAt(level - 1))), `local, level ${level}`)
         checked++
     }
@@ -57,8 +60,8 @@ for (let i = 0; i < 400; i++) {
 assert.ok(checked > 4000)
 
 // Solar sync: anchor is the 1973-12-24 eclipse, sync = 19 depth-7 cycles.
-const anchor = model.ECLIPSES_TT[20]
-assert.equal(new Date((anchor - model.TT_MINUS_UTC_SECONDS) * 1000).toISOString().slice(0, 10), '1973-12-24')
+const anchor = model.ECLIPSES[20]
+assert.equal(new Date(anchor * 1000).toISOString(), '1973-12-24T15:01:59.816Z')
 const atAnchor = model.solarAt(anchor + 1)
 assert.deepEqual([atAnchor.sync, atAnchor.digits, atAnchor.drift], [0, [0, 0, 0], 0])
 
@@ -67,9 +70,11 @@ const p = clock.prefix(level)
 const syncLength = (k) => F.number(clock.timestampAt(F.rational((625625n + 19n * BigInt(k + 1)) * 4n, p)))
     - F.number(clock.timestampAt(F.rational((625625n + 19n * BigInt(k)) * 4n, p)))
 const perSyncDrift = syncLength(0) - 4 * 86400
-assert.ok(Math.abs(perSyncDrift - -10.0224) < 1e-3, `per-sync drift ${perSyncDrift}`)
+// 1973-1992 in Unix seconds: the 14 leap seconds of that Saros interval
+// make it 14 s shorter than in TT, hence -10.0309 s rather than -10.0224 s.
+assert.ok(Math.abs(perSyncDrift - -10.0309) < 1e-3, `per-sync drift ${perSyncDrift}`)
 
-const now = model.ttFromUtcMilliseconds(utcMs)
+const now = model.unixFromMilliseconds(utcMs)
 const solar = model.solarAt(now)
 const exactSyncStart = F.number(clock.timestampAt(F.rational((625625n + 19n * BigInt(solar.sync)) * 4n, p)))
 assert.ok(Math.abs(solar.syncStart - exactSyncStart) < 1e-3)
@@ -91,22 +96,22 @@ assert.deepEqual(model.solarAt(solar.syncStart + 86400 + 60).digits.slice(0, 1),
 // Solar thresholds: quarters of the sync period, about one day each.
 const quarter = (solar.syncEnd - solar.syncStart) / 4
 assert.deepEqual(model.solarThreshold(model.solarAt(solar.syncStart + 10)),
-    { name: 'Peak', tt: solar.syncStart + quarter })
+    { name: 'Peak', time: solar.syncStart + quarter })
 assert.equal(model.solarThreshold(model.solarAt(solar.syncStart + 2.5 * quarter)).name, 'Valley')
-assert.equal(model.solarThreshold(model.solarAt(solar.syncEnd - 1)).tt, solar.syncEnd)
+assert.equal(model.solarThreshold(model.solarAt(solar.syncEnd - 1)).time, solar.syncEnd)
 assert.ok(Math.abs(quarter - 86400) < 3)
 
-// Sync clock: the anchor eclipse's own time of day (15:02:44 TT, 15:01:35
-// with today's TT - UTC) in UTC and in two zones.
-assert.equal(model.syncClockText(anchor, 0), '15:01:35')
-assert.equal(model.syncClockText(anchor, 3 * 3600), '18:01:35')
-assert.equal(model.syncClockText(anchor, -16 * 3600), '23:01:35')
+// Sync clock: the anchor eclipse's own time of day (15:01:59.816 UTC, shown
+// to the nearest second) in UTC and in two zones.
+assert.equal(model.syncClockText(anchor, 0), '15:02:00')
+assert.equal(model.syncClockText(anchor, 3 * 3600), '18:02:00')
+assert.equal(model.syncClockText(anchor, -16 * 3600), '23:02:00')
 assert.equal(model.syncClockText(solar.syncStart, 0),
-    new Date(Math.round(solar.syncStart - model.TT_MINUS_UTC_SECONDS) * 1000).toISOString().slice(11, 19))
+    new Date(Math.round(solar.syncStart) * 1000).toISOString().slice(11, 19))
 // One full lap: the drift first passes -86400 s in February 2067.
 let lap = model.solarAt(anchor + 1)
 while (lap.drift > -86400) lap = model.solarAt(lap.syncStart + 4 * 86400)
-assert.equal(new Date((lap.syncStart - model.TT_MINUS_UTC_SECONDS) * 1000).toISOString().slice(0, 7), '2067-02')
+assert.equal(new Date(lap.syncStart * 1000).toISOString().slice(0, 10), '2067-02-01')
 // Sync midnights step ~10 s earlier on the wall clock each sync.
 const step = (model.solarAt(solar.syncStart + 4 * 86400).syncStart - solar.syncStart) - 4 * 86400
 assert.ok(step < -10 && step > -10.2)
@@ -122,7 +127,7 @@ for (let i = 0; i < 60; i++) {
         const next = cycle.events.find((e) => e.name !== 'begin' && F.number(e.time) > t)
         const mine = model.nextThreshold(model.positionAt(t), level)
         assert.equal(mine.name, eventNames[next.name], `threshold name, level ${level}`)
-        assert.ok(Math.abs(mine.tt - F.number(next.time)) < 1e-3, `threshold time, level ${level}`)
+        assert.ok(Math.abs(mine.time - F.number(next.time)) < 1e-3, `threshold time, level ${level}`)
     }
 }
 
@@ -139,10 +144,10 @@ assert.deepEqual(model.wallClock(Date.parse('2024-02-29T23:59:59Z') / 1000, 0),
     { days: 19782, year: 2024, month: 2, day: 29, time: '23:59:59' })
 assert.equal(model.wallClock(Date.parse('2024-02-29T23:59:59Z') / 1000, 1).day, 1)
 const nowUtc = Date.parse('2026-10-08T12:00:00Z') / 1000
-const tt = (iso) => Date.parse(iso) / 1000 + model.TT_MINUS_UTC_SECONDS
-assert.equal(model.thresholdText({ name: 'Peak', tt: tt('2026-10-08T14:32:05Z') }, nowUtc, 0), 'Peak 14:32:05')
-assert.equal(model.thresholdText({ name: 'Node', tt: tt('2026-10-08T22:10:00Z') }, nowUtc, 3 * 3600), 'Node Oct 9 01:10')
-assert.equal(model.thresholdText({ name: 'End', tt: tt('2026-12-01T09:00:00Z') }, nowUtc, 0), 'End Dec 1 09:00')
+const unix = (iso) => Date.parse(iso) / 1000
+assert.equal(model.thresholdText({ name: 'Peak', time: unix('2026-10-08T14:32:05Z') }, nowUtc, 0), 'Peak 14:32:05')
+assert.equal(model.thresholdText({ name: 'Node', time: unix('2026-10-08T22:10:00Z') }, nowUtc, 3 * 3600), 'Node Oct 9 01:10')
+assert.equal(model.thresholdText({ name: 'End', time: unix('2026-12-01T09:00:00Z') }, nowUtc, 0), 'End Dec 1 09:00')
 
 // Period names: depth 1 is alpha; after omega the letters repeat with a suffix.
 assert.deepEqual(model.periodName(1), { letter: 0, suffix: '' })
@@ -195,3 +200,41 @@ assert.deepEqual(layout.letters, [{ x: 96, y: 155 }, { x: 96, y: 335 }])
 
 console.log(`ok: ${checked} glyph checks; per-sync drift ${perSyncDrift.toFixed(4)} s; `
     + `now sync #${solar.sync}, solar ${solar.digits.join('/')}, sync at ${model.syncClockText(solar.syncStart, 0)} UTC`)
+
+// The journal face against the browser's own reading (fractonica-clock src/ui/face/journal.js),
+// at random instants away from the edges of the finest displayed counts.
+;(async () => {
+    const clockDir = path.join(__dirname, '../../../fractonica-clock')
+    const url = (p) => require('node:url').pathToFileURL(path.join(clockDir, p)).href
+    await import(url('fractonica.js')) // the browser modules read globalThis.Fractonica
+    const { createModel } = await import(url('src/core/model.js'))
+    const { createPure } = await import(url('src/core/pure.js'))
+    const journal = await import(url('src/ui/face/journal.js'))
+    const bm = createModel()
+    const bp = createPure(bm)
+    let compared = 0
+    for (let i = 0; i < 400; i++) {
+        const t = Math.round(1.6e9 + random() * 3e8) + 0.137
+        const position = model.positionAt(t)
+        for (let u = 0; u <= model.JOURNAL_MAX_UNIT; u++) {
+            const mine = model.journalAt(position, u)
+            const theirs = journal.journalReading({ model: bm, pure: bp }, t, u)
+            if (mine.major) {
+                assert.deepEqual(mine.lines, theirs.major.lines, `major lines, unit ${u} at ${t}`)
+                assert.equal(mine.index3, theirs.major.index3, `3-stroke state, unit ${u}`)
+            } else {
+                assert.deepEqual(mine.tokens.map((x) => x.text), theirs.tokens.map((x) => x.text), `tokens, unit ${u} at ${t}`)
+                const pair = bp.pair(theirs.lead.phase)
+                assert.deepEqual([mine.pair.hi, mine.pair.lo], [pair.hi, pair.lo], `pair, unit ${u}`)
+            }
+            assert.ok(Math.abs(mine.phase - theirs.lead.phase) < 1e-6, `lead phase, unit ${u}`)
+            compared++
+        }
+    }
+    const a = model.journalArcPoint(0.25, 96, 392, 38)
+    assert.deepEqual([Math.round(a.x), Math.round(a.y)], [58, 430])
+    console.log(`ok: journal face matches the browser's at ${compared} readings`)
+})().catch((err) => {
+    console.error(err)
+    process.exit(1)
+})

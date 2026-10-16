@@ -21,7 +21,7 @@ const { execFileSync } = require('node:child_process')
 const model = require('../watchface/index.js')
 
 const ROOT = path.resolve(__dirname, '..')
-const DEFAULT_LIBRARY = path.resolve(ROOT, '../../fractonica-clock/fractonica.js')
+const DEFAULT_LIBRARY = path.resolve(ROOT, '../../fractonica-clock/fractonica-2.0.0.js')
 const OUTPUT_DIRS = [path.join(ROOT, 'assets'), path.join(ROOT, 'assets/sb7')]
 
 // One CBT grid unit is exactly ten pixels and the library stroke (0.3 units)
@@ -91,9 +91,9 @@ function writePreview(dir) {
     const width = 192
     const height = 490
     const layout = model.layoutFor(width, height)
-    const tt = model.ttFromUtcMilliseconds(Date.parse('2026-10-08T12:00:00Z'))
-    const position = model.positionAt(tt)
-    const solar = model.solarAt(tt)
+    const t = model.unixFromMilliseconds(Date.parse('2026-10-08T12:00:00Z'))
+    const position = model.positionAt(t)
+    const solar = model.solarAt(t)
     const args = ['-size', `${width}x${height}`, 'xc:black']
     const place = (file, at) => args.push(path.join(dir, file), '-geometry', `+${at.x}+${at.y}`, '-composite')
     const half = model.DOT_SIZE >> 1
@@ -130,8 +130,9 @@ function main() {
         }
         period.push({ index, svg: clock.glyphSVG(position, level), state })
     }
-    // The library's derivative dot (same position for any depth), from bin 0.
-    const dot = /<circle [^>]*\/>/.exec(period[0].svg)[0]
+    // The library's derivative dot (same position for any depth), taken from
+    // whichever bins the library dots.
+    const dot = /<circle [^>]*\/>/.exec(period.find((g) => /<circle /.test(g.svg)).svg)[0]
 
     // Solar glyphs: CBT scalar glyphs with the face's SOLAR_STROKES strokes
     // (two strokes: the same drawings as the period glyphs).
@@ -166,6 +167,9 @@ function main() {
             renderText(String(digit), SUB_W, SUB_H, SUB_POINTS, TEAL.on, path.join(dir, `sub_${digit}.png`))
         }
     }
+
+    // the journal face's images (fx/ was just emptied)
+    require('./generate_journal_assets.cjs').generateJournal(F, OUTPUT_DIRS.map((out) => path.join(out, 'fx')))
 
     writePreview(path.join(ROOT, 'assets/fx'))
 
